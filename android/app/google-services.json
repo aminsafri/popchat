@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "450840113644",
+    "project_id": "bubblepop-chat",
+    "storage_bucket": "bubblepop-chat.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:450840113644:android:89a7705e7bbbdcb97790c9",
+        "android_client_info": {
+          "package_name": "com.example.popchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB94cH_JqjBWXnp_xUPUUX9mUoz57uipO0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
