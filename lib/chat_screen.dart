@@ -1,8 +1,11 @@
 // lib/chat_screen.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'session_info_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String sessionCode;
@@ -20,6 +23,34 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final TextEditingController _messageController = TextEditingController();
 
+  StreamSubscription<DocumentSnapshot>? _sessionSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToSessionChanges();
+  }
+
+  void _listenToSessionChanges() {
+    _sessionSubscription = _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .snapshots()
+        .listen((snapshot) {
+      if (!snapshot.exists) {
+        // Session no longer exists
+        _showSessionEndedDialog();
+      } else {
+        Map<String, dynamic> sessionData = snapshot.data() as Map<String, dynamic>;
+        List<dynamic> participants = sessionData['participants'];
+        if (!participants.contains(_auth.currentUser!.uid)) {
+          // User is no longer a participant
+          _showKickedDialog();
+        }
+      }
+    });
+  }
+
   Future<void> _sendMessage() async {
     if (_messageController.text.trim().isEmpty) return;
 
@@ -27,6 +58,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
     DocumentSnapshot sessionDoc =
     await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
+    if (!sessionDoc.exists) {
+      // Session does not exist
+      _showSessionEndedDialog();
+      return;
+    }
+
     Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
 
     Map<String, dynamic> alternativeNames =
@@ -47,15 +84,26 @@ class _ChatScreenState extends State<ChatScreen> {
       'content': messageContent,
     });
 
-    // Update last message and timestamp in chat session document
+    // Update last message, timestamp, and unread counts
+    List<dynamic> participants = sessionData['participants'];
+
+    Map<String, dynamic> unreadCounts = Map<String, dynamic>.from(sessionData['unreadCounts'] ?? {});
+
+    // Increment unread count for other participants
+    for (String participantId in participants) {
+      if (participantId != userId) {
+        unreadCounts[participantId] = (unreadCounts[participantId] ?? 0) + 1;
+      }
+    }
+
     await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
       'lastMessage': messageContent,
       'lastMessageTime': Timestamp.now(),
+      'unreadCounts': unreadCounts,
     });
 
     _messageController.clear();
   }
-
 
   Stream<QuerySnapshot> _messagesStream() {
     return _firestore
@@ -71,37 +119,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     DocumentSnapshot sessionDoc =
     await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
-    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
-
-    List<dynamic> participants = sessionData['participants'];
-    participants.remove(userId);
-
-    Map<String, dynamic> alternativeNames =
-    Map<String, dynamic>.from(sessionData['alternativeNames']);
-    alternativeNames.remove(userId);
-
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
-      'participants': participants,
-      'alternativeNames': alternativeNames,
-    });
-
-    Navigator.pushReplacementNamed(context, '/home');
-  }
-
-  Future<void> _kickUser(String userId) async {
-    String currentUserId = _auth.currentUser!.uid;
-
-    DocumentSnapshot sessionDoc =
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
-    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
-
-    if (sessionData['ownerId'] != currentUserId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Only the owner can kick users')),
-      );
+    if (!sessionDoc.exists) {
+      // Session does not exist
+      _showSessionEndedDialog();
       return;
     }
 
+    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
+
     List<dynamic> participants = sessionData['participants'];
     participants.remove(userId);
 
@@ -113,6 +138,55 @@ class _ChatScreenState extends State<ChatScreen> {
       'participants': participants,
       'alternativeNames': alternativeNames,
     });
+
+    Navigator.pop(context);
+  }
+
+  @override
+  void dispose() {
+    _sessionSubscription?.cancel();
+    super.dispose();
+  }
+
+
+  void _showKickedDialog() {
+    _sessionSubscription?.cancel();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Removed from Session'),
+        content: Text('You have been removed from this session.'),
+        actions: [
+          TextButton(
+            child: Text('OK'),
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Go back to previous screen
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSessionEndedDialog() {
+    _sessionSubscription?.cancel();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Session Ended'),
+        content: Text('This session has ended or been deleted.'),
+        actions: [
+          TextButton(
+            child: Text('OK'),
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Go back to previous screen
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -121,7 +195,20 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Chat Session ${widget.sessionCode}'),
+        title: GestureDetector(
+          onTap: () {
+            // Navigate to the session info screen
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => SessionInfoScreen(
+                  sessionCode: widget.sessionCode,
+                ),
+              ),
+            );
+          },
+          child: Text('Session ${widget.sessionCode}'),
+        ),
         actions: [
           IconButton(
             icon: Icon(Icons.exit_to_app),
@@ -148,19 +235,26 @@ class _ChatScreenState extends State<ChatScreen> {
                     bool isMe = message['senderId'] == currentUserId;
 
                     return ListTile(
-                      title: Text(
-                        message['senderName'],
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: isMe ? Colors.blue : Colors.black,
+                      title: Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          padding: EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: isMe ? Colors.blue[200] : Colors.grey[300],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            message['content'],
+                            style: TextStyle(fontSize: 16),
+                          ),
                         ),
                       ),
-                      subtitle: Text(message['content']),
-                      trailing: isMe
-                          ? null
-                          : IconButton(
-                        icon: Icon(Icons.remove_circle, color: Colors.red),
-                        onPressed: () => _kickUser(message['senderId']),
+                      subtitle: Align(
+                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Text(
+                          message['senderName'],
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
                       ),
                     );
                   },

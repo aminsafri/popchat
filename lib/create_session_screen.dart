@@ -24,7 +24,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   Future<void> _createSession() async {
     if (!_formKey.currentState!.validate()) return;
 
-    String sessionCode = generateUniqueCode(6);
+    String sessionCode = await generateUniqueSessionCode(6);
     String ownerId = _auth.currentUser!.uid;
 
     DateTime expiryTime = DateTime.now().add(sessionDuration);
@@ -33,12 +33,14 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
       'ownerId': ownerId,
       'maxParticipants': maxParticipants,
       'expiryTime': Timestamp.fromDate(expiryTime),
+      'createdAt': Timestamp.now(),
       'requiresSecretKey': requiresSecretKey,
       'secretKey': requiresSecretKey ? secretKey : null,
       'participants': [ownerId],
       'alternativeNames': {
         ownerId: alternativeName.isNotEmpty ? alternativeName : _auth.currentUser!.email,
       },
+      'unreadCounts': {}, // Initialize unreadCounts
     };
 
     await _firestore.collection('chat_sessions').doc(sessionCode).set(sessionData);
@@ -50,10 +52,26 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     });
   }
 
+  // Existing generateUniqueCode method
   String generateUniqueCode(int length) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     Random random = Random.secure();
     return List.generate(length, (index) => chars[random.nextInt(chars.length)]).join();
+  }
+
+  // New generateUniqueSessionCode method
+  Future<String> generateUniqueSessionCode(int length) async {
+    String code;
+    bool exists = true;
+
+    do {
+      code = generateUniqueCode(length);
+      // Check if the code already exists in Firestore
+      var doc = await _firestore.collection('chat_sessions').doc(code).get();
+      exists = doc.exists;
+    } while (exists);
+
+    return code;
   }
 
   @override
