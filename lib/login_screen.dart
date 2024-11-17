@@ -2,28 +2,70 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'verification_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   @override
-  _LoginScreenState createState() => _LoginScreenState();
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
   final _auth = FirebaseAuth.instance;
 
   final _formKey = GlobalKey<FormState>();
-  String email = '';
-  String password = '';
+  String phoneNumber = '';
+  String verificationId = '';
+  bool isLoading = false;
   String errorMessage = '';
 
-  Future<void> _login() async {
+  Future<void> _verifyPhoneNumber() async {
+    setState(() {
+      isLoading = true;
+      errorMessage = '';
+    });
+
     try {
-      await _auth.signInWithEmailAndPassword(
-          email: email, password: password);
-      Navigator.pushReplacementNamed(context, '/home');
-    } on FirebaseAuthException catch (e) {
+      await _auth.verifyPhoneNumber(
+        phoneNumber: phoneNumber,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (PhoneAuthCredential credential) async {
+          // Auto-retrieval or instant validation has completed
+          await _auth.signInWithCredential(credential);
+          Navigator.pushReplacementNamed(context, '/home');
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          setState(() {
+            isLoading = false;
+            errorMessage = e.message ?? 'An error occurred.';
+          });
+        },
+        codeSent: (String verificationId, int? resendToken) {
+          setState(() {
+            isLoading = false;
+            this.verificationId = verificationId;
+          });
+          // Navigate to verification screen
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => VerificationScreen(
+                verificationId: verificationId,
+                phoneNumber: phoneNumber,
+              ),
+            ),
+          );
+        },
+        codeAutoRetrievalTimeout: (String verificationId) {
+          setState(() {
+            isLoading = false;
+            this.verificationId = verificationId;
+          });
+        },
+      );
+    } catch (e) {
       setState(() {
-        errorMessage = e.message ?? 'An error occurred.';
+        isLoading = false;
+        errorMessage = 'Failed to Verify Phone Number: $e';
       });
     }
   }
@@ -38,40 +80,27 @@ class _LoginScreenState extends State<LoginScreen> {
                 key: _formKey,
                 child: Column(children: [
                   TextFormField(
-                    decoration: InputDecoration(labelText: 'Email'),
+                    decoration: InputDecoration(labelText: 'Phone Number'),
+                    keyboardType: TextInputType.phone,
                     validator: (value) {
                       if (value == null || value.isEmpty)
-                        return 'Please enter email';
+                        return 'Please enter phone number';
                       return null;
                     },
-                    onChanged: (value) => email = value,
-                  ),
-                  TextFormField(
-                    decoration: InputDecoration(labelText: 'Password'),
-                    obscureText: true,
-                    validator: (value) {
-                      if (value == null || value.isEmpty)
-                        return 'Please enter password';
-                      return null;
-                    },
-                    onChanged: (value) => password = value,
+                    onChanged: (value) => phoneNumber = value.trim(),
                   ),
                   SizedBox(height: 20),
-                  ElevatedButton(
+                  isLoading
+                      ? CircularProgressIndicator()
+                      : ElevatedButton(
                       onPressed: () {
                         if (_formKey.currentState?.validate() ?? false) {
-                          _login();
+                          _verifyPhoneNumber();
                         }
                       },
-                      child: Text('Log In')),
+                      child: Text('Verify Phone Number')),
                   SizedBox(height: 10),
-                  Text(errorMessage,
-                      style: TextStyle(color: Colors.red)),
-                  TextButton(
-                      onPressed: () {
-                        Navigator.pushReplacementNamed(context, '/signup');
-                      },
-                      child: Text("Don't have an account? Sign up"))
+                  Text(errorMessage, style: TextStyle(color: Colors.red)),
                 ]))));
   }
 }

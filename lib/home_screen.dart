@@ -138,7 +138,9 @@ class _HomeScreenState extends State<HomeScreen> {
               Map<String, dynamic> alternativeNames =
               Map<String, dynamic>.from(
                   chatSession['alternativeNames'] ?? {});
-              String displayName = alternativeNames[userId] ?? 'Unknown';
+              String displayName = alternativeNames[userId] ??
+                  _auth.currentUser?.displayName ??
+                  'Unknown';
 
               // Unread message count (optional)
               Map<String, dynamic> unreadCounts =
