@@ -1,9 +1,12 @@
 // lib/create_session_screen.dart
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class CreateSessionScreen extends StatefulWidget {
   @override
@@ -20,6 +23,9 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   bool requiresSecretKey = false;
   String secretKey = '';
   String alternativeName = '';
+  String sessionTitle = '';
+  File? _sessionImage;
+  String? _sessionImageUrl;
 
   Future<void> _createSession() async {
     if (!_formKey.currentState!.validate()) return;
@@ -29,8 +35,21 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
 
     DateTime expiryTime = DateTime.now().add(sessionDuration);
 
+    // Upload the session image if one is selected
+    if (_sessionImage != null) {
+      _sessionImageUrl = await _uploadSessionImage(_sessionImage!, sessionCode);
+    }
+
+    // Ensure _sessionImageUrl is not null
+    _sessionImageUrl ??= '';
+
+    // Print the session image URL for debugging
+    print('Session Image URL: $_sessionImageUrl');
+
     Map<String, dynamic> sessionData = {
       'ownerId': ownerId,
+      'sessionTitle': sessionTitle,
+      'sessionImageUrl': _sessionImageUrl,
       'maxParticipants': maxParticipants,
       'expiryTime': Timestamp.fromDate(expiryTime),
       'createdAt': Timestamp.now(),
@@ -38,10 +57,16 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
       'secretKey': requiresSecretKey ? secretKey : null,
       'participants': [ownerId],
       'alternativeNames': {
-        ownerId: alternativeName.isNotEmpty ? alternativeName : _auth.currentUser!.email,
+        ownerId: alternativeName.isNotEmpty
+            ? alternativeName
+            : _auth.currentUser!.email,
       },
-      'unreadCounts': {}, // Initialize unreadCounts
+      'unreadCounts': {},
+      'leftParticipants': [],
     };
+
+    // Print the session data for debugging
+    print('Session Data: $sessionData');
 
     await _firestore.collection('chat_sessions').doc(sessionCode).set(sessionData);
 
@@ -52,14 +77,12 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     });
   }
 
-  // Existing generateUniqueCode method
   String generateUniqueCode(int length) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     Random random = Random.secure();
     return List.generate(length, (index) => chars[random.nextInt(chars.length)]).join();
   }
 
-  // New generateUniqueSessionCode method
   Future<String> generateUniqueSessionCode(int length) async {
     String code;
     bool exists = true;
@@ -74,6 +97,57 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     return code;
   }
 
+  // Method to pick an image
+  Future<void> _pickSessionImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
+    if (pickedFile != null) {
+      setState(() {
+        _sessionImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  // Method to upload the session image to Firebase Storage
+  Future<String> _uploadSessionImage(File imageFile, String sessionCode) async {
+    try {
+      // Create a unique file name using the session code
+      String fileName = '$sessionCode.jpg';
+
+      // Create a reference to the Firebase Storage bucket
+      Reference storageReference = FirebaseStorage.instance
+          .ref()
+          .child('session_images/$fileName');
+
+      // Upload the file to Firebase Storage
+      UploadTask uploadTask = storageReference.putFile(imageFile);
+
+      // Wait for the upload to complete
+      TaskSnapshot snapshot = await uploadTask;
+
+      // Retrieve the download URL
+      String downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Print the download URL for debugging
+      print('Download URL: $downloadUrl');
+
+      return downloadUrl;
+    } on FirebaseException catch (e) {
+      print('Firebase Exception: ${e.code} - ${e.message}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to upload session image: ${e.message}')),
+      );
+      return '';
+    } catch (e) {
+      print('Unknown error uploading session image: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to upload session image.')),
+      );
+      return '';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -84,8 +158,30 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
                 key: _formKey,
                 child: ListView(children: [
                   TextFormField(
+                    decoration: InputDecoration(labelText: 'Session Title'),
+                    validator: (value) {
+                      if (value == null || value.isEmpty)
+                        return 'Please enter a session title';
+                      return null;
+                    },
+                    onChanged: (value) => sessionTitle = value,
+                  ),
+                  TextFormField(
                     decoration: InputDecoration(labelText: 'Alternative Display Name'),
                     onChanged: (value) => alternativeName = value,
+                  ),
+                  // Display selected image
+                  if (_sessionImage != null)
+                    Container(
+                      margin: EdgeInsets.symmetric(vertical: 10),
+                      height: 150,
+                      child: Image.file(_sessionImage!),
+                    ),
+                  // Button to pick image
+                  TextButton.icon(
+                    icon: Icon(Icons.image),
+                    label: Text('Select Session Image'),
+                    onPressed: _pickSessionImage,
                   ),
                   TextFormField(
                     decoration: InputDecoration(labelText: 'Maximum Participants'),

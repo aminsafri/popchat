@@ -47,22 +47,24 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
       }
     }
 
-    // Check if max participants reached
-    List<dynamic> participants = sessionData['participants'];
-    int maxParticipants = sessionData['maxParticipants'];
-    if (participants.length >= maxParticipants) {
-      setState(() => errorMessage = 'Session is full');
-      return;
-    }
-
     String userId = _auth.currentUser!.uid;
 
-    // Add user to participants
-    participants.add(userId);
+    // Check if user is already in leftParticipants
+    List<dynamic> leftParticipants = sessionData['leftParticipants'] ?? [];
+    if (leftParticipants.contains(userId)) {
+      // Remove user from leftParticipants
+      leftParticipants.remove(userId);
+    }
+
+    // Add user to participants if not already present
+    List<dynamic> participants = sessionData['participants'] ?? [];
+    if (!participants.contains(userId)) {
+      participants.add(userId);
+    }
 
     // Update alternative names
     Map<String, dynamic> alternativeNames =
-    Map<String, dynamic>.from(sessionData['alternativeNames']);
+    Map<String, dynamic>.from(sessionData['alternativeNames'] ?? {});
     alternativeNames[userId] = alternativeName.isNotEmpty
         ? alternativeName
         : _auth.currentUser!.email;
@@ -70,6 +72,7 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
     await _firestore.collection('chat_sessions').doc(sessionCode).update({
       'participants': participants,
       'alternativeNames': alternativeNames,
+      'leftParticipants': leftParticipants,
     });
 
     // Navigate to the chat screen

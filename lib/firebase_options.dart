@@ -55,7 +55,7 @@ class DefaultFirebaseOptions {
     appId: '1:450840113644:android:89a7705e7bbbdcb97790c9',
     messagingSenderId: '450840113644',
     projectId: 'bubblepop-chat',
-    storageBucket: 'bubblepop-chat.appspot.com',
+    storageBucket: 'bubblepop-chat.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -63,7 +63,7 @@ class DefaultFirebaseOptions {
     appId: '1:450840113644:ios:93bb9121097ff1a47790c9',
     messagingSenderId: '450840113644',
     projectId: 'bubblepop-chat',
-    storageBucket: 'bubblepop-chat.appspot.com',
+    storageBucket: 'bubblepop-chat.firebasestorage.app',
     iosBundleId: 'com.example.popchat',
   );
 
@@ -72,7 +72,7 @@ class DefaultFirebaseOptions {
     appId: '1:450840113644:ios:93bb9121097ff1a47790c9',
     messagingSenderId: '450840113644',
     projectId: 'bubblepop-chat',
-    storageBucket: 'bubblepop-chat.appspot.com',
+    storageBucket: 'bubblepop-chat.firebasestorage.app',
     iosBundleId: 'com.example.popchat',
   );
 
@@ -82,7 +82,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '450840113644',
     projectId: 'bubblepop-chat',
     authDomain: 'bubblepop-chat.firebaseapp.com',
-    storageBucket: 'bubblepop-chat.appspot.com',
+    storageBucket: 'bubblepop-chat.firebasestorage.app',
     measurementId: 'G-LDCSQ973C3',
   );
 }

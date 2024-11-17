@@ -1,7 +1,6 @@
 // lib/chat_screen.dart
 
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -25,6 +24,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   StreamSubscription<DocumentSnapshot>? _sessionSubscription;
 
+  bool isParticipant = true;
+  bool hasLeftSession = false;
+
   @override
   void initState() {
     super.initState();
@@ -42,10 +44,27 @@ class _ChatScreenState extends State<ChatScreen> {
         _showSessionEndedDialog();
       } else {
         Map<String, dynamic> sessionData = snapshot.data() as Map<String, dynamic>;
-        List<dynamic> participants = sessionData['participants'];
+        List<dynamic> participants = sessionData['participants'] ?? [];
+        List<dynamic> leftParticipants = sessionData['leftParticipants'] ?? [];
+
         if (!participants.contains(_auth.currentUser!.uid)) {
-          // User is no longer a participant
-          _showKickedDialog();
+          // User is no longer a participant (e.g., kicked)
+          setState(() {
+            isParticipant = false;
+            hasLeftSession = false; // Not applicable
+          });
+        } else if (leftParticipants.contains(_auth.currentUser!.uid)) {
+          // User has left the session
+          setState(() {
+            isParticipant = true;
+            hasLeftSession = true;
+          });
+        } else {
+          // User is an active participant
+          setState(() {
+            isParticipant = true;
+            hasLeftSession = false;
+          });
         }
       }
     });
@@ -54,21 +73,28 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendMessage() async {
     if (_messageController.text.trim().isEmpty) return;
 
+    if (_auth.currentUser == null) {
+      // Handle unauthenticated state
+      return;
+    }
     String userId = _auth.currentUser!.uid;
 
-    DocumentSnapshot sessionDoc =
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
+    DocumentSnapshot sessionDoc = await _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .get();
     if (!sessionDoc.exists) {
       // Session does not exist
       _showSessionEndedDialog();
       return;
     }
 
-    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
+    Map<String, dynamic> sessionData =
+    sessionDoc.data() as Map<String, dynamic>;
 
     Map<String, dynamic> alternativeNames =
-    Map<String, dynamic>.from(sessionData['alternativeNames']);
-    String senderName = alternativeNames[userId];
+    Map<String, dynamic>.from(sessionData['alternativeNames'] ?? {});
+    String senderName = alternativeNames[userId] ?? 'Unknown';
 
     String messageContent = _messageController.text.trim();
 
@@ -85,9 +111,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     // Update last message, timestamp, and unread counts
-    List<dynamic> participants = sessionData['participants'];
+    List<dynamic> participants = sessionData['participants'] ?? [];
 
-    Map<String, dynamic> unreadCounts = Map<String, dynamic>.from(sessionData['unreadCounts'] ?? {});
+    Map<String, dynamic> unreadCounts =
+    Map<String, dynamic>.from(sessionData['unreadCounts'] ?? {});
 
     // Increment unread count for other participants
     for (String participantId in participants) {
@@ -96,7 +123,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
+    await _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .update({
       'lastMessage': messageContent,
       'lastMessageTime': Timestamp.now(),
       'unreadCounts': unreadCounts,
@@ -114,59 +144,10 @@ class _ChatScreenState extends State<ChatScreen> {
         .snapshots();
   }
 
-  Future<void> _leaveSession() async {
-    String userId = _auth.currentUser!.uid;
-
-    DocumentSnapshot sessionDoc =
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
-    if (!sessionDoc.exists) {
-      // Session does not exist
-      _showSessionEndedDialog();
-      return;
-    }
-
-    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
-
-    List<dynamic> participants = sessionData['participants'];
-    participants.remove(userId);
-
-    Map<String, dynamic> alternativeNames =
-    Map<String, dynamic>.from(sessionData['alternativeNames']);
-    alternativeNames.remove(userId);
-
-    await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
-      'participants': participants,
-      'alternativeNames': alternativeNames,
-    });
-
-    Navigator.pop(context);
-  }
-
   @override
   void dispose() {
     _sessionSubscription?.cancel();
     super.dispose();
-  }
-
-
-  void _showKickedDialog() {
-    _sessionSubscription?.cancel();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Removed from Session'),
-        content: Text('You have been removed from this session.'),
-        actions: [
-          TextButton(
-            child: Text('OK'),
-            onPressed: () {
-              Navigator.pop(context); // Close dialog
-              Navigator.pop(context); // Go back to previous screen
-            },
-          ),
-        ],
-      ),
-    );
   }
 
   void _showSessionEndedDialog() {
@@ -209,12 +190,6 @@ class _ChatScreenState extends State<ChatScreen> {
           },
           child: Text('Session ${widget.sessionCode}'),
         ),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.exit_to_app),
-            onPressed: _leaveSession,
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -236,7 +211,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
                     return ListTile(
                       title: Align(
-                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment:
+                        isMe ? Alignment.centerRight : Alignment.centerLeft,
                         child: Container(
                           padding: EdgeInsets.all(10),
                           decoration: BoxDecoration(
@@ -250,7 +226,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       subtitle: Align(
-                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment:
+                        isMe ? Alignment.centerRight : Alignment.centerLeft,
                         child: Text(
                           message['senderName'],
                           style: TextStyle(fontSize: 12, color: Colors.grey),
@@ -263,25 +240,41 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           Divider(height: 1.0),
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8.0),
-            color: Theme.of(context).cardColor,
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration:
-                    InputDecoration.collapsed(hintText: 'Send a message'),
+          if (isParticipant && !hasLeftSession)
+          // Show message input
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 8.0),
+              color: Theme.of(context).cardColor,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      decoration:
+                      InputDecoration.collapsed(hintText: 'Send a message'),
+                    ),
                   ),
-                ),
-                IconButton(
-                  icon: Icon(Icons.send),
-                  onPressed: _sendMessage,
-                ),
-              ],
+                  IconButton(
+                    icon: Icon(Icons.send),
+                    onPressed: _sendMessage,
+                  ),
+                ],
+              ),
+            )
+          else if (hasLeftSession)
+          // User has left the session
+            Container(
+              padding: EdgeInsets.all(16.0),
+              alignment: Alignment.center,
+              child: Text('You have left this session.'),
+            )
+          else
+          // User is not a participant (e.g., kicked)
+            Container(
+              padding: EdgeInsets.all(16.0),
+              alignment: Alignment.center,
+              child: Text('You are no longer a participant in this session.'),
             ),
-          ),
         ],
       ),
     );

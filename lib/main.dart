@@ -8,11 +8,15 @@ import 'home_screen.dart';
 import 'create_session_screen.dart';
 import 'join_session_screen.dart';
 import 'chat_screen.dart';
+import 'firebase_options.dart'; // Ensure this is configured properly
 import 'package:firebase_auth/firebase_auth.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform, // Replace with your Firebase options
+  );
+
   runApp(MyApp());
 }
 
@@ -22,18 +26,21 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Messenger App',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      title: 'PopChat',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
       home: StreamBuilder<User?>(
-          stream: _auth.authStateChanges(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting)
-              return CircularProgressIndicator();
-            if (snapshot.hasData) {
-              return HomeScreen();
-            }
-            return LoginScreen();
-          }),
+        stream: _auth.authStateChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting)
+            return Center(child: CircularProgressIndicator());
+          if (snapshot.hasData) {
+            return HomeScreen();
+          }
+          return LoginScreen();
+        },
+      ),
       routes: {
         '/signup': (context) => SignUpScreen(),
         '/login': (context) => LoginScreen(),

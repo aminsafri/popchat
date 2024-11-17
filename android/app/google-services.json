@@ -2,7 +2,7 @@
   "project_info": {
     "project_number": "450840113644",
     "project_id": "bubblepop-chat",
-    "storage_bucket": "bubblepop-chat.appspot.com"
+    "storage_bucket": "bubblepop-chat.firebasestorage.app"
   },
   "client": [
     {

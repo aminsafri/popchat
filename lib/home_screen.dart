@@ -4,13 +4,38 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'chat_screen.dart';
-import 'package:intl/intl.dart'; // For date formatting
+import 'package:intl/intl.dart';
+import 'create_session_screen.dart';
+import 'join_session_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
 
-  HomeScreen({Key? key}) : super(key: key);
+  List<String> deletedSessions = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDeletedSessions();
+  }
+
+  Future<void> _loadDeletedSessions() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      deletedSessions = prefs.getStringList('deletedSessions') ?? [];
+      isLoading = false;
+    });
+    print('Deleted sessions: $deletedSessions');
+  }
 
   Future<void> _logout(BuildContext context) async {
     await _auth.signOut();
@@ -19,9 +44,23 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('PopChat'),
+          actions: [
+            IconButton(
+              icon: Icon(Icons.logout),
+              onPressed: () => _logout(context),
+            ),
+          ],
+        ),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     String userId = _auth.currentUser!.uid;
 
-    // Query to fetch chat sessions where the current user is a participant
     Query chatSessionsQuery = _firestore
         .collection('chat_sessions')
         .where('participants', arrayContains: userId)
@@ -29,17 +68,40 @@ class HomeScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Chats'),
+        title: Text('PopChat'),
         actions: [
-          IconButton(icon: Icon(Icons.logout), onPressed: () => _logout(context)),
+          IconButton(
+            icon: Icon(Icons.logout),
+            onPressed: () => _logout(context),
+          ),
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: chatSessionsQuery.snapshots(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return Center(child: CircularProgressIndicator());
+          if (snapshot.hasError) {
+            print('Error fetching chat sessions: ${snapshot.error}');
+            return Center(child: Text('Error loading chat sessions.'));
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return Center(
+              child: Text(
+                'No chats yet. Start by creating or joining a session.',
+                style: TextStyle(fontSize: 16, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
 
           List<DocumentSnapshot> docs = snapshot.data!.docs;
+
+          // Filter out deleted sessions
+          docs.removeWhere((doc) => deletedSessions.contains(doc.id));
 
           if (docs.isEmpty) {
             return Center(
@@ -54,16 +116,28 @@ class HomeScreen extends StatelessWidget {
           return ListView.builder(
             itemCount: docs.length,
             itemBuilder: (context, index) {
-              Map<String, dynamic> chatSession = docs[index].data() as Map<String, dynamic>;
+              // Extract chat session data
+              Map<String, dynamic> chatSession =
+              docs[index].data() as Map<String, dynamic>;
               String sessionCode = docs[index].id;
               String lastMessage = chatSession['lastMessage'] ?? '';
               Timestamp? lastMessageTime = chatSession['lastMessageTime'];
-              DateTime lastMessageDateTime =
-              lastMessageTime != null ? lastMessageTime.toDate() : DateTime.now();
+              DateTime lastMessageDateTime = lastMessageTime != null
+                  ? lastMessageTime.toDate()
+                  : DateTime.now();
+
+              // Get session title
+              String sessionTitle =
+                  chatSession['sessionTitle'] ?? 'Session $sessionCode';
+
+              // Get session image URL
+              String sessionImageUrl =
+                  chatSession['sessionImageUrl'] as String? ?? '';
 
               // Alternative names for participants
               Map<String, dynamic> alternativeNames =
-              Map<String, dynamic>.from(chatSession['alternativeNames']);
+              Map<String, dynamic>.from(
+                  chatSession['alternativeNames'] ?? {});
               String displayName = alternativeNames[userId] ?? 'Unknown';
 
               // Unread message count (optional)
@@ -71,34 +145,76 @@ class HomeScreen extends StatelessWidget {
               Map<String, dynamic>.from(chatSession['unreadCounts'] ?? {});
               int unreadCount = unreadCounts[userId] ?? 0;
 
+              // Check if the user has left the session
+              List<dynamic> leftParticipants =
+                  chatSession['leftParticipants'] ?? [];
+              bool hasLeftSession = leftParticipants.contains(userId);
+
               return Column(
                 children: [
                   ListTile(
-                    leading: CircleAvatar(
+                    leading: sessionImageUrl.isNotEmpty
+                        ? CircleAvatar(
                       radius: 24,
-                      backgroundColor: Colors.blueAccent,
+                      backgroundColor: Colors.transparent,
+                      child: CachedNetworkImage(
+                        imageUrl: sessionImageUrl,
+                        placeholder: (context, url) =>
+                            CircularProgressIndicator(),
+                        errorWidget: (context, url, error) =>
+                            CircleAvatar(
+                              radius: 24,
+                              backgroundColor: hasLeftSession
+                                  ? Colors.grey
+                                  : Colors.blueAccent,
+                              child: Text(
+                                sessionTitle[0].toUpperCase(),
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 20),
+                              ),
+                            ),
+                        imageBuilder: (context, imageProvider) =>
+                            CircleAvatar(
+                              radius: 24,
+                              backgroundImage: imageProvider,
+                            ),
+                      ),
+                    )
+                        : CircleAvatar(
+                      radius: 24,
+                      backgroundColor:
+                      hasLeftSession ? Colors.grey : Colors.blueAccent,
                       child: Text(
-                        displayName[0].toUpperCase(),
-                        style: TextStyle(color: Colors.white, fontSize: 20),
+                        sessionTitle[0].toUpperCase(),
+                        style:
+                        TextStyle(color: Colors.white, fontSize: 20),
                       ),
                     ),
                     title: Text(
-                      'Session $sessionCode',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      sessionTitle,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: hasLeftSession ? Colors.grey : Colors.black,
+                      ),
                     ),
                     subtitle: Text(
                       lastMessage,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: hasLeftSession ? Colors.grey : Colors.black),
                     ),
                     trailing: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
                           DateFormat('hh:mm a').format(lastMessageDateTime),
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                          style: TextStyle(
+                              fontSize: 12,
+                              color:
+                              hasLeftSession ? Colors.grey : Colors.black),
                         ),
-                        if (unreadCount > 0)
+                        if (unreadCount > 0 && !hasLeftSession)
                           Container(
                             margin: EdgeInsets.only(top: 4),
                             padding: EdgeInsets.all(6),
@@ -108,7 +224,8 @@ class HomeScreen extends StatelessWidget {
                             ),
                             child: Text(
                               '$unreadCount',
-                              style: TextStyle(color: Colors.white, fontSize: 12),
+                              style:
+                              TextStyle(color: Colors.white, fontSize: 12),
                             ),
                           ),
                       ],
@@ -151,7 +268,10 @@ class HomeScreen extends StatelessWidget {
             title: Text('Create Chat Session'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushNamed(context, '/create_session');
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => CreateSessionScreen()),
+              );
             },
           ),
           ListTile(
@@ -159,7 +279,10 @@ class HomeScreen extends StatelessWidget {
             title: Text('Join Chat Session'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushNamed(context, '/join_session');
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => JoinSessionScreen()),
+              );
             },
           ),
         ],
