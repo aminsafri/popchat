@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'chat_screen.dart';
+
 
 class JoinSessionScreen extends StatefulWidget {
   @override
@@ -67,7 +69,7 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
     Map<String, dynamic>.from(sessionData['alternativeNames'] ?? {});
     alternativeNames[userId] = alternativeName.isNotEmpty
         ? alternativeName
-        : _auth.currentUser!.email;
+        : _auth.currentUser!.displayName; // Use displayName instead of email
 
     await _firestore.collection('chat_sessions').doc(sessionCode).update({
       'participants': participants,
@@ -76,10 +78,15 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
     });
 
     // Navigate to the chat screen
-    Navigator.pushReplacementNamed(context, '/chat', arguments: {
-      'sessionCode': sessionCode,
-      'alternativeName': alternativeName,
-    });
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatScreen(
+          sessionCode: sessionCode,
+          alternativeName: alternativeName,
+        ),
+      ),
+    );
   }
 
   @override

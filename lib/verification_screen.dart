@@ -8,7 +8,8 @@ class VerificationScreen extends StatefulWidget {
   final String verificationId;
   final String phoneNumber;
 
-  VerificationScreen({required this.verificationId, required this.phoneNumber});
+  VerificationScreen(
+      {required this.verificationId, required this.phoneNumber});
 
   @override
   State<VerificationScreen> createState() => _VerificationScreenState();
@@ -49,8 +50,9 @@ class _VerificationScreenState extends State<VerificationScreen> {
           ),
         );
       } else {
-        // Existing user, navigate to home
-        Navigator.pushReplacementNamed(context, '/home');
+        // Existing user; no need to navigate manually
+        // The StreamBuilder in main.dart will handle it
+        Navigator.popUntil(context, (route) => route.isFirst);
       }
     } on FirebaseAuthException catch (e) {
       setState(() {

@@ -7,6 +7,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:math';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'chat_screen.dart';
+
 
 class CreateSessionScreen extends StatefulWidget {
   @override
@@ -59,7 +61,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
       'alternativeNames': {
         ownerId: alternativeName.isNotEmpty
             ? alternativeName
-            : _auth.currentUser!.email,
+            : _auth.currentUser!.displayName, // Use displayName instead of email
       },
       'unreadCounts': {},
       'leftParticipants': [],
@@ -71,10 +73,16 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     await _firestore.collection('chat_sessions').doc(sessionCode).set(sessionData);
 
     // Navigate to the chat screen
-    Navigator.pushReplacementNamed(context, '/chat', arguments: {
-      'sessionCode': sessionCode,
-      'alternativeName': alternativeName,
-    });
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatScreen(
+          sessionCode: sessionCode,
+          alternativeName: alternativeName,
+        ),
+      ),
+    );
+
   }
 
   String generateUniqueCode(int length) {

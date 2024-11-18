@@ -39,7 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _logout(BuildContext context) async {
     await _auth.signOut();
-    Navigator.pushReplacementNamed(context, '/login');
+    // No need to navigate manually; the StreamBuilder in main.dart will handle navigation
   }
 
   @override
@@ -48,6 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return Scaffold(
         appBar: AppBar(
           title: Text('PopChat'),
+          automaticallyImplyLeading: false,
           actions: [
             IconButton(
               icon: Icon(Icons.logout),
@@ -69,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('PopChat'),
+        automaticallyImplyLeading: false, // Remove the back button
         actions: [
           IconButton(
             icon: Icon(Icons.logout),
@@ -184,8 +186,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     )
                         : CircleAvatar(
                       radius: 24,
-                      backgroundColor:
-                      hasLeftSession ? Colors.grey : Colors.blueAccent,
+                      backgroundColor: hasLeftSession
+                          ? Colors.grey
+                          : Colors.blueAccent,
                       child: Text(
                         sessionTitle[0].toUpperCase(),
                         style:
@@ -204,7 +207,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          color: hasLeftSession ? Colors.grey : Colors.black),
+                          color:
+                          hasLeftSession ? Colors.grey : Colors.black),
                     ),
                     trailing: Column(
                       mainAxisAlignment: MainAxisAlignment.center,

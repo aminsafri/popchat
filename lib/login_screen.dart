@@ -14,7 +14,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   final _formKey = GlobalKey<FormState>();
   String phoneNumber = '';
-  String verificationId = '';
   bool isLoading = false;
   String errorMessage = '';
 
@@ -31,7 +30,7 @@ class _LoginScreenState extends State<LoginScreen> {
         verificationCompleted: (PhoneAuthCredential credential) async {
           // Auto-retrieval or instant validation has completed
           await _auth.signInWithCredential(credential);
-          Navigator.pushReplacementNamed(context, '/home');
+          // No need to navigate manually; StreamBuilder will handle it
         },
         verificationFailed: (FirebaseAuthException e) {
           setState(() {
@@ -42,7 +41,6 @@ class _LoginScreenState extends State<LoginScreen> {
         codeSent: (String verificationId, int? resendToken) {
           setState(() {
             isLoading = false;
-            this.verificationId = verificationId;
           });
           // Navigate to verification screen
           Navigator.push(
@@ -58,7 +56,6 @@ class _LoginScreenState extends State<LoginScreen> {
         codeAutoRetrievalTimeout: (String verificationId) {
           setState(() {
             isLoading = false;
-            this.verificationId = verificationId;
           });
         },
       );

@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'home_screen.dart';
 
 class AdditionalInfoScreen extends StatefulWidget {
   final User user;
@@ -37,10 +36,7 @@ class _AdditionalInfoScreenState extends State<AdditionalInfoScreen> {
         'phoneNumber': widget.user.phoneNumber,
       });
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => HomeScreen()),
-      );
+      // No need to navigate manually; the StreamBuilder in main.dart will handle it
     } catch (e) {
       setState(() {
         isLoading = false;
