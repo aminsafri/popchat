@@ -7,12 +7,19 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 import 'additional_info_screen.dart';
+import 'package:firebase_app_check/firebase_app_check.dart'; // Import Firebase App Check
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
-    options:
-    DefaultFirebaseOptions.currentPlatform, // Replace with your Firebase options
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Activate Firebase App Check
+  await FirebaseAppCheck.instance.activate(
+    androidProvider: AndroidProvider.debug,
+    // For iOS, use .debug or .deviceCheck
+    // webProvider: ReCaptchaV3Provider('YOUR_RECAPTCHA_SITE_KEY'), // For web
   );
 
   runApp(MyApp());
@@ -32,13 +39,12 @@ class MyApp extends StatelessWidget {
         stream: _auth.authStateChanges(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting)
-            return Scaffold(
+            return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
             );
           if (snapshot.hasData) {
             // Check if user has displayName set
-            if (snapshot.data!.displayName == null ||
-                snapshot.data!.displayName!.isEmpty) {
+            if (snapshot.data!.displayName == null || snapshot.data!.displayName!.isEmpty) {
               return AdditionalInfoScreen(user: snapshot.data!);
             } else {
               return HomeScreen();

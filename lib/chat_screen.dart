@@ -1,10 +1,17 @@
 // lib/chat_screen.dart
 
 import 'dart:async';
+import 'dart:convert';
+import 'package:basic_utils/basic_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'session_info_screen.dart';
+import 'package:encrypt/encrypt.dart' as encrypt; // Aliased import
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:pointycastle/asymmetric/api.dart' show RSAPrivateKey; // Import RSAPrivateKey
+import 'dart:typed_data';
+
 
 class ChatScreen extends StatefulWidget {
   final String sessionCode;
@@ -27,18 +34,82 @@ class _ChatScreenState extends State<ChatScreen> {
   bool isParticipant = true;
   bool hasLeftSession = false;
 
+  final storage = FlutterSecureStorage();
+
+  encrypt.Key? groupKey; // Use encrypt.Key
+  int keyVersion = 1;
+
   @override
   void initState() {
     super.initState();
+    _initializeGroupKey();
     _listenToSessionChanges();
   }
+
+  Future<void> _initializeGroupKey() async {
+    DocumentSnapshot sessionDoc = await _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .get();
+
+    if (!sessionDoc.exists) {
+      _showSessionEndedDialog();
+      return;
+    }
+
+    Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
+    Map<String, dynamic> encryptedGroupKeys = Map<String, String>.from(sessionData['encryptedGroupKeys'] ?? {});
+    keyVersion = sessionData['keyVersion'] ?? 1;
+
+    String? encryptedGroupKeyBase64 = encryptedGroupKeys[_auth.currentUser!.uid];
+
+    if (encryptedGroupKeyBase64 == null) {
+      // User does not have access to the group key
+      _showNoAccessDialog();
+      return;
+    }
+
+    // Check if group key is already stored
+    String groupKeyStorageKey = 'groupKey_${widget.sessionCode}_$keyVersion';
+    String? storedGroupKeyBase64 = await storage.read(key: groupKeyStorageKey);
+
+    if (storedGroupKeyBase64 != null) {
+      // Load group key from storage
+      groupKey = encrypt.Key(base64.decode(storedGroupKeyBase64));
+    } else {
+      // Decrypt group key
+      groupKey = await decryptGroupKey(encryptedGroupKeyBase64);
+
+      // Store group key securely
+      await storage.write(key: groupKeyStorageKey, value: base64.encode(groupKey!.bytes));
+    }
+  }
+
+
+  Future<encrypt.Key> decryptGroupKey(String encryptedGroupKeyBase64) async {
+    String? privateKeyPem = await storage.read(key: 'privateKey');
+    if (privateKeyPem == null) {
+      throw Exception('Private key not found');
+    }
+
+    RSAPrivateKey privateKey = CryptoUtils.rsaPrivateKeyFromPem(privateKeyPem);
+
+    final encrypter = encrypt.Encrypter(encrypt.RSA(privateKey: privateKey));
+    final encryptedGroupKey = encrypt.Encrypted.fromBase64(encryptedGroupKeyBase64);
+    final decryptedBytes = encrypter.decryptBytes(encryptedGroupKey);
+
+    // Convert decryptedBytes (List<int>) to Uint8List
+    return encrypt.Key(Uint8List.fromList(decryptedBytes));
+  }
+
+
 
   void _listenToSessionChanges() {
     _sessionSubscription = _firestore
         .collection('chat_sessions')
         .doc(widget.sessionCode)
         .snapshots()
-        .listen((snapshot) {
+        .listen((snapshot) async {
       if (!snapshot.exists) {
         // Session no longer exists
         _showSessionEndedDialog();
@@ -46,6 +117,12 @@ class _ChatScreenState extends State<ChatScreen> {
         Map<String, dynamic> sessionData = snapshot.data() as Map<String, dynamic>;
         List<dynamic> participants = sessionData['participants'] ?? [];
         List<dynamic> leftParticipants = sessionData['leftParticipants'] ?? [];
+
+        int newKeyVersion = sessionData['keyVersion'] ?? 1;
+        if (newKeyVersion != keyVersion) {
+          keyVersion = newKeyVersion;
+          await _initializeGroupKey(); // Re-initialize group key
+        }
 
         if (!participants.contains(_auth.currentUser!.uid)) {
           // User is no longer a participant (e.g., kicked)
@@ -70,8 +147,27 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  Future<String> encryptGroupMessage(String message, encrypt.Key groupKey) async {
+    final iv = encrypt.IV.fromSecureRandom(16); // Use encrypt.IV
+    final encrypter = encrypt.Encrypter(encrypt.AES(groupKey, mode: encrypt.AESMode.cbc)); // Use encrypt.AESMode
+    final encrypted = encrypter.encrypt(message, iv: iv);
+    return jsonEncode({
+      'cipherText': encrypted.base64,
+      'iv': iv.base64,
+    });
+  }
+
+  String decryptGroupMessage(String encryptedMessageJson, encrypt.Key groupKey) {
+    final Map<String, dynamic> messageMap = jsonDecode(encryptedMessageJson);
+    final encrypted = encrypt.Encrypted.fromBase64(messageMap['cipherText']);
+    final iv = encrypt.IV.fromBase64(messageMap['iv']);
+    final encrypter = encrypt.Encrypter(encrypt.AES(groupKey, mode: encrypt.AESMode.cbc));
+    final decrypted = encrypter.decrypt(encrypted, iv: iv);
+    return decrypted;
+  }
+
   Future<void> _sendMessage() async {
-    if (_messageController.text.trim().isEmpty) return;
+    if (_messageController.text.trim().isEmpty || groupKey == null) return;
 
     if (_auth.currentUser == null) {
       // Handle unauthenticated state
@@ -98,6 +194,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     String messageContent = _messageController.text.trim();
 
+    // Encrypt message content
+    String encryptedMessage = await encryptGroupMessage(messageContent, groupKey!);
+
     // Create message document
     await _firestore
         .collection('chat_sessions')
@@ -107,7 +206,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'senderId': userId,
       'senderName': senderName,
       'timestamp': Timestamp.now(),
-      'content': messageContent,
+      'encryptedContent': encryptedMessage, // Store encrypted message
     });
 
     // Update last message, timestamp, and unread counts
@@ -127,7 +226,7 @@ class _ChatScreenState extends State<ChatScreen> {
         .collection('chat_sessions')
         .doc(widget.sessionCode)
         .update({
-      'lastMessage': messageContent,
+      'lastMessage': 'Encrypted Message',
       'lastMessageTime': Timestamp.now(),
       'unreadCounts': unreadCounts,
     });
@@ -170,6 +269,26 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _showNoAccessDialog() {
+    _sessionSubscription?.cancel();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Access Denied'),
+        content: Text('You do not have access to this session.'),
+        actions: [
+          TextButton(
+            child: Text('OK'),
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Go back to previous screen
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     String currentUserId = _auth.currentUser!.uid;
@@ -197,7 +316,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: StreamBuilder<QuerySnapshot>(
               stream: _messagesStream(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return CircularProgressIndicator();
+                if (!snapshot.hasData || groupKey == null) return CircularProgressIndicator();
                 List<DocumentSnapshot> docs = snapshot.data!.docs;
 
                 return ListView.builder(
@@ -208,6 +327,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     docs[index].data() as Map<String, dynamic>;
 
                     bool isMe = message['senderId'] == currentUserId;
+
+                    String encryptedContent = message['encryptedContent'];
+                    String decryptedContent = '';
+
+                    try {
+                      decryptedContent = decryptGroupMessage(encryptedContent, groupKey!);
+                    } catch (e) {
+                      decryptedContent = 'Failed to decrypt message';
+                    }
 
                     return ListTile(
                       title: Align(
@@ -220,7 +348,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
-                            message['content'],
+                            decryptedContent,
                             style: TextStyle(fontSize: 16),
                           ),
                         ),

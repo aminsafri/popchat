@@ -5,8 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:basic_utils/basic_utils.dart';
+import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
+import 'dart:convert';
 
 class SessionInfoScreen extends StatefulWidget {
   final String sessionCode;
@@ -20,6 +23,7 @@ class SessionInfoScreen extends StatefulWidget {
 class _SessionInfoScreenState extends State<SessionInfoScreen> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
+  final storage = FlutterSecureStorage();
 
   Map<String, dynamic>? sessionData;
   bool isLoading = true;
@@ -48,15 +52,28 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
         isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Session not found')),
+        const SnackBar(content: Text('Session not found')),
       );
     }
+  }
+
+  // Key generation and encryption methods
+  encrypt.Key generateGroupKey() {
+    return encrypt.Key.fromSecureRandom(32); // 256-bit key
+  }
+
+  Future<String> encryptGroupKeyForParticipant(String participantPublicKeyPem, encrypt.Key groupKey) async {
+    RSAPublicKey publicKey = CryptoUtils.rsaPublicKeyFromPem(participantPublicKeyPem);
+
+    final encrypter = encrypt.Encrypter(encrypt.RSA(publicKey: publicKey));
+    final encryptedGroupKey = encrypter.encryptBytes(groupKey.bytes);
+    return encryptedGroupKey.base64;
   }
 
   Future<void> _kickMember(String userId) async {
     if (!isOwner) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Only the owner can kick members')),
+        const SnackBar(content: Text('Only the owner can kick members')),
       );
       return;
     }
@@ -75,6 +92,9 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
       'alternativeNames': alternativeNames,
     });
 
+    // Update group key for remaining participants
+    await _updateGroupKeyForParticipants(participants);
+
     // Update local state
     setState(() {
       sessionData!['participants'] = participants;
@@ -82,8 +102,40 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Member kicked')),
+      const SnackBar(content: Text('Member kicked')),
     );
+  }
+
+  Future<void> _updateGroupKeyForParticipants(List<dynamic> participants) async {
+    // Generate new group key
+    encrypt.Key newGroupKey = generateGroupKey();
+
+    // Encrypt group key for all participants
+    Map<String, String> encryptedGroupKeys = {};
+
+    for (String participantId in participants) {
+      // Retrieve participant's public key from Firestore
+      DocumentSnapshot userDoc = await _firestore.collection('users').doc(participantId).get();
+      String participantPublicKeyPem = userDoc['publicKey'];
+
+      String encryptedGroupKey = await encryptGroupKeyForParticipant(participantPublicKeyPem, newGroupKey);
+      encryptedGroupKeys[participantId] = encryptedGroupKey;
+    }
+
+    // Increment key version
+    int keyVersion = (sessionData!['keyVersion'] ?? 1) + 1;
+
+    // Update session data
+    await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
+      'encryptedGroupKeys': encryptedGroupKeys,
+      'keyVersion': keyVersion,
+    });
+
+    // Store new group key for current user (if still a participant)
+    if (participants.contains(currentUserId)) {
+      await storage.write(
+          key: 'groupKey_${widget.sessionCode}_$keyVersion', value: base64.encode(newGroupKey.bytes));
+    }
   }
 
   @override
@@ -91,18 +143,18 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     if (isLoading) {
       return Scaffold(
         appBar: AppBar(
-          title: Text('Session Info'),
+          title: const Text('Session Info'),
         ),
-        body: Center(child: CircularProgressIndicator()),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (sessionData == null) {
       return Scaffold(
         appBar: AppBar(
-          title: Text('Session Info'),
+          title: const Text('Session Info'),
         ),
-        body: Center(child: Text('Session not found')),
+        body: const Center(child: Text('Session not found')),
       );
     }
 
@@ -119,33 +171,33 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Session Info'),
+        title: const Text('Session Info'),
       ),
       body: Padding(
-        padding: EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Session title
             Text(
               sessionTitle,
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             // Session code
             Text(
               'Session Code: ${widget.sessionCode}',
               style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
             // Created at
             Text(
               'Created At: ${DateFormat.yMMMd().add_jm().format(createdAt)}',
               style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
             // Participants List
-            Text(
+            const Text(
               'Participants:',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
@@ -167,7 +219,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
                     ),
                     trailing: isOwner && participantId != currentUserId && !hasLeft
                         ? IconButton(
-                      icon: Icon(Icons.remove_circle, color: Colors.red),
+                      icon: const Icon(Icons.remove_circle, color: Colors.red),
                       onPressed: () => _confirmKickMember(participantId, participantName),
                     )
                         : null,
@@ -181,17 +233,17 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
               if (isOwner)
                 ElevatedButton(
                   onPressed: _confirmLeaveSession,
-                  child: Text('Leave Session (Transfer Ownership)'),
+                  child: const Text('Leave Session (Transfer Ownership)'),
                 )
               else
                 ElevatedButton(
                   onPressed: _confirmLeaveSession,
-                  child: Text('Leave Session'),
+                  child: const Text('Leave Session'),
                 ),
             ] else ...[
               ElevatedButton(
                 onPressed: _confirmDeleteSession,
-                child: Text('Delete Session'),
+                child: const Text('Delete Session'),
               ),
             ],
           ],
@@ -204,15 +256,15 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     bool confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Kick Member'),
+        title: const Text('Kick Member'),
         content: Text('Are you sure you want to kick $displayName?'),
         actions: [
           TextButton(
-            child: Text('Cancel'),
+            child: const Text('Cancel'),
             onPressed: () => Navigator.pop(context, false),
           ),
           TextButton(
-            child: Text('Kick'),
+            child: const Text('Kick'),
             onPressed: () => Navigator.pop(context, true),
           ),
         ],
@@ -221,22 +273,23 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
         false;
 
     if (confirm) {
-      _kickMember(userId);
+      await _kickMember(userId);
     }
   }
+
   Future<void> _confirmLeaveSession() async {
     bool confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Leave Session'),
-        content: Text('Are you sure you want to leave this session?'),
+        title: const Text('Leave Session'),
+        content: const Text('Are you sure you want to leave this session?'),
         actions: [
           TextButton(
-            child: Text('Cancel'),
+            child: const Text('Cancel'),
             onPressed: () => Navigator.pop(context, false),
           ),
           TextButton(
-            child: Text('Leave'),
+            child: const Text('Leave'),
             onPressed: () => Navigator.pop(context, true),
           ),
         ],
@@ -245,7 +298,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
         false;
 
     if (confirm) {
-      _leaveSession();
+      await _leaveSession();
     }
   }
 
@@ -256,7 +309,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
       // Transfer ownership
       List<dynamic> participants = List.from(sessionData!['participants']);
       List<dynamic> remainingParticipants = List.from(participants);
-      remainingParticipants.remove(userId); // Create a list without the owner for ownership transfer
+      remainingParticipants.remove(userId); // Exclude the owner
 
       if (remainingParticipants.isNotEmpty) {
         // Assign new owner
@@ -266,6 +319,9 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
           'leftParticipants': FieldValue.arrayUnion([userId]),
           // Do not remove the owner from participants
         });
+
+        // Update group key for remaining participants
+        await _updateGroupKeyForParticipants(remainingParticipants);
       } else {
         // Delete the session if no participants left
         await _firestore.collection('chat_sessions').doc(widget.sessionCode).delete();
@@ -275,6 +331,13 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
       await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
         'leftParticipants': FieldValue.arrayUnion([userId]),
       });
+
+      // Remove user from participants list
+      List<dynamic> participants = List.from(sessionData!['participants']);
+      participants.remove(userId);
+
+      // Update group key for remaining participants
+      await _updateGroupKeyForParticipants(participants);
     }
 
     // Update local state
@@ -284,23 +347,22 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     });
 
     Navigator.pop(context); // Close SessionInfoScreen
+    Navigator.pop(context); // Close ChatScreen
   }
-
-
 
   Future<void> _confirmDeleteSession() async {
     bool confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Delete Session'),
-        content: Text('Are you sure you want to delete this session from your chat list?'),
+        title: const Text('Delete Session'),
+        content: const Text('Are you sure you want to delete this session from your chat list?'),
         actions: [
           TextButton(
-            child: Text('Cancel'),
+            child: const Text('Cancel'),
             onPressed: () => Navigator.pop(context, false),
           ),
           TextButton(
-            child: Text('Delete'),
+            child: const Text('Delete'),
             onPressed: () => Navigator.pop(context, true),
           ),
         ],
@@ -309,7 +371,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
         false;
 
     if (confirm) {
-      _deleteSession();
+      await _deleteSession();
     }
   }
 
@@ -322,5 +384,4 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     Navigator.pop(context); // Close SessionInfoScreen
     Navigator.pop(context); // Close ChatScreen
   }
-
 }

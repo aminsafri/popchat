@@ -8,7 +8,11 @@ import 'dart:math';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'chat_screen.dart';
-
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:basic_utils/basic_utils.dart';
+import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
+import 'dart:convert';
 
 class CreateSessionScreen extends StatefulWidget {
   @override
@@ -21,13 +25,27 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   final _auth = FirebaseAuth.instance;
 
   int maxParticipants = 10;
-  Duration sessionDuration = Duration(hours: 1);
+  Duration sessionDuration = const Duration(hours: 1);
   bool requiresSecretKey = false;
   String secretKey = '';
   String alternativeName = '';
   String sessionTitle = '';
   File? _sessionImage;
   String? _sessionImageUrl;
+
+  final storage = FlutterSecureStorage();
+
+  encrypt.Key generateGroupKey() {
+    return encrypt.Key.fromSecureRandom(32); // 256-bit key
+  }
+
+  Future<String> encryptGroupKeyForParticipant(String participantPublicKeyPem, encrypt.Key groupKey) async {
+    RSAPublicKey publicKey = CryptoUtils.rsaPublicKeyFromPem(participantPublicKeyPem);
+
+    final encrypter = encrypt.Encrypter(encrypt.RSA(publicKey: publicKey));
+    final encryptedGroupKey = encrypter.encryptBytes(groupKey.bytes);
+    return encryptedGroupKey.base64;
+  }
 
   Future<void> _createSession() async {
     if (!_formKey.currentState!.validate()) return;
@@ -45,8 +63,20 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     // Ensure _sessionImageUrl is not null
     _sessionImageUrl ??= '';
 
-    // Print the session image URL for debugging
-    print('Session Image URL: $_sessionImageUrl');
+    // Generate group key
+    encrypt.Key groupKey = generateGroupKey();
+
+    // Retrieve owner's public key from Firestore
+    DocumentSnapshot ownerDoc = await _firestore.collection('users').doc(ownerId).get();
+    String ownerPublicKeyPem = ownerDoc['publicKey'];
+
+    // Encrypt group key for owner
+    String encryptedGroupKey = await encryptGroupKeyForParticipant(ownerPublicKeyPem, groupKey);
+
+    // Create encrypted group keys map
+    Map<String, String> encryptedGroupKeys = {
+      ownerId: encryptedGroupKey,
+    };
 
     Map<String, dynamic> sessionData = {
       'ownerId': ownerId,
@@ -59,18 +89,18 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
       'secretKey': requiresSecretKey ? secretKey : null,
       'participants': [ownerId],
       'alternativeNames': {
-        ownerId: alternativeName.isNotEmpty
-            ? alternativeName
-            : _auth.currentUser!.displayName, // Use displayName instead of email
+        ownerId: alternativeName.isNotEmpty ? alternativeName : _auth.currentUser!.displayName,
       },
       'unreadCounts': {},
       'leftParticipants': [],
+      'encryptedGroupKeys': encryptedGroupKeys,
+      'keyVersion': 1,
     };
 
-    // Print the session data for debugging
-    print('Session Data: $sessionData');
-
     await _firestore.collection('chat_sessions').doc(sessionCode).set(sessionData);
+
+    // Store the group key locally for the creator
+    await storage.write(key: 'groupKey_${sessionCode}_1', value: base64.encode(groupKey.bytes));
 
     // Navigate to the chat screen
     Navigator.pushReplacement(
@@ -82,7 +112,6 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
         ),
       ),
     );
-
   }
 
   String generateUniqueCode(int length) {
@@ -124,9 +153,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
       String fileName = '$sessionCode.jpg';
 
       // Create a reference to the Firebase Storage bucket
-      Reference storageReference = FirebaseStorage.instance
-          .ref()
-          .child('session_images/$fileName');
+      Reference storageReference = FirebaseStorage.instance.ref().child('session_images/$fileName');
 
       // Upload the file to Firebase Storage
       UploadTask uploadTask = storageReference.putFile(imageFile);
@@ -150,7 +177,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
     } catch (e) {
       print('Unknown error uploading session image: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to upload session image.')),
+        const SnackBar(content: Text('Failed to upload session image.')),
       );
       return '';
     }
@@ -159,40 +186,39 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(title: Text('Create Chat Session')),
+        appBar: AppBar(title: const Text('Create Chat Session')),
         body: Padding(
-            padding: EdgeInsets.all(16.0),
+            padding: const EdgeInsets.all(16.0),
             child: Form(
                 key: _formKey,
                 child: ListView(children: [
                   TextFormField(
-                    decoration: InputDecoration(labelText: 'Session Title'),
+                    decoration: const InputDecoration(labelText: 'Session Title'),
                     validator: (value) {
-                      if (value == null || value.isEmpty)
-                        return 'Please enter a session title';
+                      if (value == null || value.isEmpty) return 'Please enter a session title';
                       return null;
                     },
                     onChanged: (value) => sessionTitle = value,
                   ),
                   TextFormField(
-                    decoration: InputDecoration(labelText: 'Alternative Display Name'),
+                    decoration: const InputDecoration(labelText: 'Alternative Display Name'),
                     onChanged: (value) => alternativeName = value,
                   ),
                   // Display selected image
                   if (_sessionImage != null)
                     Container(
-                      margin: EdgeInsets.symmetric(vertical: 10),
+                      margin: const EdgeInsets.symmetric(vertical: 10),
                       height: 150,
                       child: Image.file(_sessionImage!),
                     ),
                   // Button to pick image
                   TextButton.icon(
-                    icon: Icon(Icons.image),
-                    label: Text('Select Session Image'),
+                    icon: const Icon(Icons.image),
+                    label: const Text('Select Session Image'),
                     onPressed: _pickSessionImage,
                   ),
                   TextFormField(
-                    decoration: InputDecoration(labelText: 'Maximum Participants'),
+                    decoration: const InputDecoration(labelText: 'Maximum Participants'),
                     initialValue: '10',
                     keyboardType: TextInputType.number,
                     validator: (value) {
@@ -205,39 +231,34 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
                     onChanged: (value) => maxParticipants = int.parse(value),
                   ),
                   DropdownButtonFormField<Duration>(
-                    decoration: InputDecoration(labelText: 'Session Duration'),
+                    decoration: const InputDecoration(labelText: 'Session Duration'),
                     value: sessionDuration,
-                    items: [
-                      DropdownMenuItem(
-                          child: Text('30 Minutes'), value: Duration(minutes: 30)),
-                      DropdownMenuItem(
-                          child: Text('1 Hour'), value: Duration(hours: 1)),
-                      DropdownMenuItem(
-                          child: Text('2 Hours'), value: Duration(hours: 2)),
-                      DropdownMenuItem(
-                          child: Text('1 Day'), value: Duration(days: 1)),
+                    items: const [
+                      DropdownMenuItem(child: Text('30 Minutes'), value: Duration(minutes: 30)),
+                      DropdownMenuItem(child: Text('1 Hour'), value: Duration(hours: 1)),
+                      DropdownMenuItem(child: Text('2 Hours'), value: Duration(hours: 2)),
+                      DropdownMenuItem(child: Text('1 Day'), value: Duration(days: 1)),
                     ],
                     onChanged: (value) => setState(() => sessionDuration = value!),
                   ),
                   SwitchListTile(
-                    title: Text('Require Secret Key'),
+                    title: const Text('Require Secret Key'),
                     value: requiresSecretKey,
                     onChanged: (value) => setState(() => requiresSecretKey = value),
                   ),
                   if (requiresSecretKey)
                     TextFormField(
-                      decoration: InputDecoration(labelText: 'Secret Key'),
+                      decoration: const InputDecoration(labelText: 'Secret Key'),
                       validator: (value) {
-                        if (value == null || value.isEmpty)
-                          return 'Please enter a secret key';
+                        if (value == null || value.isEmpty) return 'Please enter a secret key';
                         return null;
                       },
                       onChanged: (value) => secretKey = value,
                     ),
-                  SizedBox(height: 20),
+                  const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: _createSession,
-                    child: Text('Create Session'),
+                    child: const Text('Create Session'),
                   ),
                 ]))));
   }
