@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:basic_utils/basic_utils.dart';
+import 'dart:async'; // Added for compute
+import 'package:flutter/foundation.dart'; // Added for compute
+import 'home_screen.dart';
+import 'utils/rsa_key_generator.dart'; // Import the RSA key generator
 
 class AdditionalInfoScreen extends StatefulWidget {
   final User user;
@@ -35,11 +38,17 @@ class _AdditionalInfoScreenState extends State<AdditionalInfoScreen> {
       print('Updating user profile...');
       await widget.user.updateDisplayName(displayName);
 
+      // Reload the user
+      await widget.user.reload();
+
+      // Get the updated user
+      User? updatedUser = FirebaseAuth.instance.currentUser;
+
       // Save user data to Firestore
       print('Saving user data to Firestore...');
-      await _firestore.collection('users').doc(widget.user.uid).set({
+      await _firestore.collection('users').doc(updatedUser!.uid).set({
         'displayName': displayName,
-        'phoneNumber': widget.user.phoneNumber,
+        'phoneNumber': updatedUser.phoneNumber,
       }, SetOptions(merge: true));
 
       // Generate RSA key pair and upload public key
@@ -47,7 +56,17 @@ class _AdditionalInfoScreenState extends State<AdditionalInfoScreen> {
       await generateAndStoreRSAKeyPair();
 
       print('User info saved successfully.');
-      // No need to navigate manually; the StreamBuilder in main.dart will handle it
+
+      // Stop loading indicator
+      setState(() {
+        isLoading = false;
+      });
+
+      // Optionally navigate to HomeScreen manually
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => HomeScreen()),
+      );
     } catch (e, stackTrace) {
       print('Error in _saveUserInfo: $e\n$stackTrace');
       setState(() {
@@ -64,14 +83,10 @@ class _AdditionalInfoScreenState extends State<AdditionalInfoScreen> {
   Future<void> generateAndStoreRSAKeyPair() async {
     try {
       print('Generating RSA key pair...');
-      AsymmetricKeyPair<PublicKey, PrivateKey> keyPair = CryptoUtils.generateRSAKeyPair(keySize: 2048);
+      Map<String, String> keyPairMap = await compute(generateRSAKeyPairIsolate, 2048);
 
-      RSAPublicKey publicKey = keyPair.publicKey as RSAPublicKey;
-      RSAPrivateKey privateKey = keyPair.privateKey as RSAPrivateKey;
-
-      print('Encoding keys to PEM format...');
-      String publicKeyPem = CryptoUtils.encodeRSAPublicKeyToPemPkcs1(publicKey);
-      String privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPemPkcs1(privateKey);
+      String publicKeyPem = keyPairMap['publicKeyPem']!;
+      String privateKeyPem = keyPairMap['privateKeyPem']!;
 
       print('Storing private key securely...');
       await storage.write(key: 'privateKey', value: privateKeyPem);

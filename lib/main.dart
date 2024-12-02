@@ -17,7 +17,8 @@ void main() async {
 
   // Activate Firebase App Check
   await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug,
+    // Uncomment and configure if needed
+    // androidProvider: AndroidProvider.debug,
     // For iOS, use .debug or .deviceCheck
     // webProvider: ReCaptchaV3Provider('YOUR_RECAPTCHA_SITE_KEY'), // For web
   );
@@ -36,13 +37,15 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
       ),
       home: StreamBuilder<User?>(
-        stream: _auth.authStateChanges(),
+        stream: _auth.userChanges(), // Listening to userChanges()
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting)
             return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
             );
           if (snapshot.hasData) {
+            print('User data received in StreamBuilder');
+            print('Display Name: ${snapshot.data!.displayName}');
             // Check if user has displayName set
             if (snapshot.data!.displayName == null || snapshot.data!.displayName!.isEmpty) {
               return AdditionalInfoScreen(user: snapshot.data!);

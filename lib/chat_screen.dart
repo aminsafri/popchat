@@ -64,7 +64,6 @@ class _ChatScreenState extends State<ChatScreen> {
     String? encryptedGroupKeyBase64 = encryptedGroupKeys[_auth.currentUser!.uid];
 
     if (encryptedGroupKeyBase64 == null) {
-      // User does not have access to the group key
       _showNoAccessDialog();
       return;
     }
@@ -75,13 +74,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (storedGroupKeyBase64 != null) {
       // Load group key from storage
-      groupKey = encrypt.Key(base64.decode(storedGroupKeyBase64));
+      setState(() {
+        groupKey = encrypt.Key(base64.decode(storedGroupKeyBase64));
+      });
     } else {
       // Decrypt group key
-      groupKey = await decryptGroupKey(encryptedGroupKeyBase64);
+      var decryptedGroupKey = await decryptGroupKey(encryptedGroupKeyBase64);
 
       // Store group key securely
-      await storage.write(key: groupKeyStorageKey, value: base64.encode(groupKey!.bytes));
+      await storage.write(key: groupKeyStorageKey, value: base64.encode(decryptedGroupKey.bytes));
+
+      setState(() {
+        groupKey = decryptedGroupKey;
+      });
     }
   }
 
