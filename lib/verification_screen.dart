@@ -36,7 +36,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
       UserCredential userCredential =
       await _auth.signInWithCredential(credential);
 
-      // Check if this is a new user
+      // Check if new user
       bool isNewUser = userCredential.additionalUserInfo?.isNewUser ?? false;
 
       if (isNewUser) {
