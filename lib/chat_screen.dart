@@ -56,7 +56,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _showSessionEndedDialog();
       return;
     }
-
+    //test
     Map<String, dynamic> sessionData = sessionDoc.data() as Map<String, dynamic>;
     Map<String, dynamic> encryptedGroupKeys = Map<String, String>.from(sessionData['encryptedGroupKeys'] ?? {});
     keyVersion = sessionData['keyVersion'] ?? 1;
