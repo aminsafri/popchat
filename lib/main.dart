@@ -2,12 +2,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart'; // Ensure this is configured properly
+import 'firebase_options.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'home_screen.dart';
-import 'login_screen.dart';
-import 'additional_info_screen.dart';
-import 'package:firebase_app_check/firebase_app_check.dart'; // Import Firebase App Check
+import 'package:firebase_app_check/firebase_app_check.dart';
+
+import 'screens/home_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/additional_info_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,13 +16,8 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Activate Firebase App Check
-  await FirebaseAppCheck.instance.activate(
-    // Uncomment and configure if needed
-    // androidProvider: AndroidProvider.debug,
-    // For iOS, use .debug or .deviceCheck
-    // webProvider: ReCaptchaV3Provider('YOUR_RECAPTCHA_SITE_KEY'), // For web
-  );
+  // Activate Firebase App Check (optional)
+  await FirebaseAppCheck.instance.activate();
 
   runApp(MyApp());
 }
@@ -37,22 +33,25 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
       ),
       home: StreamBuilder<User?>(
-        stream: _auth.userChanges(), // Listening to userChanges()
+        stream: _auth.userChanges(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting)
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
             );
+          }
+
           if (snapshot.hasData) {
-            print('User data received in StreamBuilder');
-            print('Display Name: ${snapshot.data!.displayName}');
-            // Check if user has displayName set
-            if (snapshot.data!.displayName == null || snapshot.data!.displayName!.isEmpty) {
-              return AdditionalInfoScreen(user: snapshot.data!);
+            // Check if user has a displayName set
+            final user = snapshot.data!;
+            if (user.displayName == null || user.displayName!.isEmpty) {
+              return AdditionalInfoScreen(user: user);
             } else {
               return HomeScreen();
             }
           }
+
+          // If no user is logged in, show LoginScreen
           return LoginScreen();
         },
       ),
