@@ -9,6 +9,7 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/additional_info_screen.dart';
+import 'screens/splash_screen.dart'; // Import SplashScreen
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,13 +33,20 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
+      // Remove initialRoute since we're using home
+      // initialRoute: '/', // Remove this line
+      routes: {
+        '/home': (context) => HomeScreen(),
+        '/login': (context) => LoginScreen(),
+        '/additional_info': (context) => AdditionalInfoScreen(user: FirebaseAuth.instance.currentUser!),
+        // Remove '/' route to avoid conflict
+        // '/': (context) => SplashScreen(), // Remove this line
+      },
       home: StreamBuilder<User?>(
         stream: _auth.userChanges(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
+            return SplashScreen(); // Show SplashScreen while waiting
           }
 
           if (snapshot.hasData) {

@@ -8,24 +8,50 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Minimal example
     return Scaffold(
-      appBar: AppBar(title: Text("Settings")),
-      body: ListView(
-        children: [
-          ListTile(
-            title: Text("Passport Verification"),
-            subtitle: Text("Verify your identity via passport"),
-            trailing: Icon(Icons.arrow_forward_ios),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => PassportVerificationScreen()),
-              );
-            },
-          ),
-          // more settings...
-        ],
+      // Modern AppBar with brand color
+      appBar: AppBar(
+        title: const Text(
+          'PopChat - Settings',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        backgroundColor: const Color(0xFF0088cc),
+        elevation: 0,
+      ),
+      body: Container(
+        color: Colors.grey[100],
+        child: ListView(
+          children: [
+            // Example: A Card to group settings
+            Card(
+              margin: const EdgeInsets.all(16),
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.book_sharp, color: Color(0xFF0088cc)),
+                    title: const Text('Passport Verification'),
+                    subtitle: const Text('Verify your identity via passport'),
+                    trailing: const Icon(Icons.arrow_forward_ios, color: Colors.grey),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const PassportVerificationScreen()),
+                      );
+                    },
+                  ),
+                  // Add a Divider if you have more settings below
+                  // const Divider(height: 1),
+                  // More settings can go here...
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

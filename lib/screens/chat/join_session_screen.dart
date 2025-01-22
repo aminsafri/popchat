@@ -1,5 +1,7 @@
 // lib/screens/chat/join_session_screen.dart
 
+import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,8 +9,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:basic_utils/basic_utils.dart';
 import 'package:pointycastle/asymmetric/api.dart' show RSAPublicKey;
-import 'dart:convert';
-import 'dart:math';
 
 import 'chat_screen.dart';
 
@@ -33,24 +33,27 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
     return encrypt.Key.fromSecureRandom(32); // 256-bit key
   }
 
-  /// Helper for PEM if needed
+  /// Helper method to format PEM if missing headers
   String reconstructPem(String pem, String keyType) {
     pem = pem.replaceAll('-----BEGIN $keyType-----', '');
     pem = pem.replaceAll('-----END $keyType-----', '');
     pem = pem.replaceAll('\n', '').replaceAll('\r', '').replaceAll(' ', '');
     final buffer = StringBuffer();
     for (int i = 0; i < pem.length; i += 64) {
-      int end = (i + 64 < pem.length) ? i + 64 : pem.length;
+      final end = (i + 64 < pem.length) ? i + 64 : pem.length;
       buffer.writeln(pem.substring(i, end));
     }
     return '-----BEGIN $keyType-----\n${buffer.toString()}-----END $keyType-----';
   }
 
-  Future<String> encryptGroupKeyForParticipant(String participantPublicKeyPem, encrypt.Key groupKey) async {
+  Future<String> encryptGroupKeyForParticipant(
+      String participantPublicKeyPem, encrypt.Key groupKey) async {
     if (!participantPublicKeyPem.contains('-----BEGIN RSA PUBLIC KEY-----') ||
         !participantPublicKeyPem.contains('-----END RSA PUBLIC KEY-----')) {
-      participantPublicKeyPem = reconstructPem(participantPublicKeyPem, 'RSA PUBLIC KEY');
+      participantPublicKeyPem =
+          reconstructPem(participantPublicKeyPem, 'RSA PUBLIC KEY');
     }
+
     final parsedKey = CryptoUtils.rsaPublicKeyFromPem(participantPublicKeyPem);
     final encrypter = encrypt.Encrypter(
       encrypt.RSA(
@@ -66,7 +69,8 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     try {
-      final sessionDoc = await _firestore.collection('chat_sessions').doc(sessionCode).get();
+      final sessionDoc =
+      await _firestore.collection('chat_sessions').doc(sessionCode).get();
       if (!sessionDoc.exists) {
         setState(() => errorMessage = 'Session not found');
         return;
@@ -91,64 +95,62 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
 
       final userId = _auth.currentUser!.uid;
 
-      // Handle leftParticipants
-      final leftParticipants = List<String>.from(sessionData['leftParticipants'] ?? []);
+      // leftParticipants
+      final leftParticipants = List<String>.from(
+          sessionData['leftParticipants'] ?? []);
       if (leftParticipants.contains(userId)) {
         leftParticipants.remove(userId);
       }
 
       // Add user to participants if not present
-      final participants = List<String>.from(sessionData['participants'] ?? []);
+      final participants =
+      List<String>.from(sessionData['participants'] ?? []);
       if (!participants.contains(userId)) {
         participants.add(userId);
       }
 
       // Update alternativeNames
-      final alternativeNames = Map<String, dynamic>.from(sessionData['alternativeNames'] ?? {});
-      alternativeNames[userId] =
-      alternativeName.isNotEmpty ? alternativeName : _auth.currentUser!.displayName;
+      final alternativeNames =
+      Map<String, dynamic>.from(sessionData['alternativeNames'] ?? {});
+      alternativeNames[userId] = alternativeName.isNotEmpty
+          ? alternativeName
+          : _auth.currentUser!.displayName;
 
-      // Generate new group key (for the newly rotated version)
+      // Generate new group key
       final newGroupKey = generateGroupKey();
 
       // Encrypt new group key for all participants
       final newEncKeys = <String, String>{};
       for (final pid in participants) {
-        final userDoc = await _firestore.collection('users').doc(pid).get();
+        final userDoc =
+        await _firestore.collection('users').doc(pid).get();
         if (!userDoc.exists) continue;
         final participantPublicKeyPem = userDoc['publicKey'] as String;
-        final encKeyForThisUser = await encryptGroupKeyForParticipant(participantPublicKeyPem, newGroupKey);
+        final encKeyForThisUser = await encryptGroupKeyForParticipant(
+            participantPublicKeyPem, newGroupKey);
         newEncKeys[pid] = encKeyForThisUser;
       }
 
-      // **Increment key version** but preserve older keys
+      // Increment key version
       int currentKeyVersion = sessionData['keyVersion'] ?? 1;
       final newKeyVersion = currentKeyVersion + 1;
 
-      // Nested approach
-      // old structure = sessionData['encryptedGroupKeys'] => might be { "uidA": "...", "uidB": "..." }
-      // we want { "1": { "uidA":"...", "uidB":"..." }, "2": { ... } }
-      var allEncKeys = Map<String, dynamic>.from(sessionData['encryptedGroupKeys'] ?? {});
-      // If the old structure is not yet nested, let's fix that:
-      // We'll treat it as { "1": oldMap } if it's just a single-level map.
-      if (allEncKeys.isNotEmpty) {
-        // check if there's a "1" key or "2" key, etc.
-        bool isAlreadyNested = false;
-        for (final k in allEncKeys.keys) {
-          if (k is String && allEncKeys[k] is Map) {
-            // We assume it's nested
-            isAlreadyNested = true;
-            break;
-          }
+      // Nested approach for storing encryptedGroupKeys
+      var allEncKeys = Map<String, dynamic>.from(
+          sessionData['encryptedGroupKeys'] ?? {});
+      bool isAlreadyNested = false;
+      for (final k in allEncKeys.keys) {
+        if (k is String && allEncKeys[k] is Map) {
+          isAlreadyNested = true;
+          break;
         }
-        if (!isAlreadyNested) {
-          // Move the old single-level map to "currentKeyVersion" submap
-          allEncKeys = {
-            "$currentKeyVersion": allEncKeys,
-          };
-        }
-      } else {
-        // If empty, create a nested map for the old version
+      }
+      if (!isAlreadyNested && allEncKeys.isNotEmpty) {
+        // Move old single-level map to {currentKeyVersion: oldMap}
+        allEncKeys = {
+          "$currentKeyVersion": allEncKeys,
+        };
+      } else if (allEncKeys.isEmpty) {
         allEncKeys["$currentKeyVersion"] = {};
       }
 
@@ -156,11 +158,14 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
       allEncKeys["$newKeyVersion"] = newEncKeys;
 
       // Update Firestore
-      await _firestore.collection('chat_sessions').doc(sessionCode).update({
+      await _firestore
+          .collection('chat_sessions')
+          .doc(sessionCode)
+          .update({
         'participants': participants,
         'alternativeNames': alternativeNames,
         'leftParticipants': leftParticipants,
-        'encryptedGroupKeys': allEncKeys, // nested now
+        'encryptedGroupKeys': allEncKeys,
         'keyVersion': newKeyVersion,
       });
 
@@ -181,7 +186,7 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
         ),
       );
     } catch (e) {
-      print('Error joining session: $e');
+      debugPrint('Error joining session: $e');
       setState(() => errorMessage = 'Failed to join session: $e');
     }
   }
@@ -189,37 +194,114 @@ class _JoinSessionScreenState extends State<JoinSessionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Join Chat Session')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            children: [
-              TextFormField(
-                decoration: const InputDecoration(labelText: 'Session Code'),
-                validator: (value) {
-                  if (value == null || value.isEmpty) return 'Please enter session code';
-                  return null;
-                },
-                onChanged: (value) => sessionCode = value.toUpperCase(),
+      // Modern AppBar with brand color and centered title
+      appBar: AppBar(
+        title: const Text(
+          'PopChat - Join Session',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: const Color(0xFF0088cc),
+      ),
+      // Light background for reduced eye strain
+      body: Container(
+        color: Colors.grey[100],
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16.0),
+            child: Card(
+              elevation: 6,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
               ),
-              TextFormField(
-                decoration: const InputDecoration(labelText: 'Alternative Display Name'),
-                onChanged: (value) => alternativeName = value,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Join a Chat Session',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Session Code
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          labelText: 'Session Code',
+                          hintText: 'e.g. ABC123',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter session code';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) =>
+                        sessionCode = value.toUpperCase(),
+                      ),
+                      const SizedBox(height: 16),
+                      // Alternative Display Name
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          labelText: 'Alternative Display Name',
+                          hintText: 'Optional alias in this session',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (value) => alternativeName = value,
+                      ),
+                      const SizedBox(height: 16),
+                      // Secret Key
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          labelText: 'Secret Key (if required)',
+                          hintText: 'Enter secret key if needed',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (value) => secretKey = value,
+                      ),
+                      const SizedBox(height: 20),
+                      // Join Session Button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _joinSession,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0088cc),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text(
+                            'Join Session',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      // Error Message
+                      if (errorMessage.isNotEmpty)
+                        Text(
+                          errorMessage,
+                          style: const TextStyle(color: Colors.red),
+                          textAlign: TextAlign.center,
+                        ),
+                    ],
+                  ),
+                ),
               ),
-              TextFormField(
-                decoration: const InputDecoration(labelText: 'Secret Key (if required)'),
-                onChanged: (value) => secretKey = value,
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _joinSession,
-                child: const Text('Join Session'),
-              ),
-              const SizedBox(height: 10),
-              Text(errorMessage, style: const TextStyle(color: Colors.red)),
-            ],
+            ),
           ),
         ),
       ),

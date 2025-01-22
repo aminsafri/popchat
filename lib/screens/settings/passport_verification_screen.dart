@@ -18,7 +18,7 @@ String parseMalaysianNameLine(String line1) {
   String namePortion = line1.substring(5);
   // replace all < with space
   namePortion = namePortion.replaceAll('<', ' ');
-  // collapse multiple spaces, trim
+  // collapse multiple spaces, then trim
   namePortion = namePortion.replaceAll(RegExp(r'\s+'), ' ').trim();
   return namePortion;
 }
@@ -27,10 +27,12 @@ class PassportVerificationScreen extends StatefulWidget {
   const PassportVerificationScreen({Key? key}) : super(key: key);
 
   @override
-  State<PassportVerificationScreen> createState() => _PassportVerificationScreenState();
+  State<PassportVerificationScreen> createState() =>
+      _PassportVerificationScreenState();
 }
 
-class _PassportVerificationScreenState extends State<PassportVerificationScreen> {
+class _PassportVerificationScreenState
+    extends State<PassportVerificationScreen> {
   final ImagePicker _picker = ImagePicker();
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
@@ -47,6 +49,7 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
     _checkVerificationStatus();
   }
 
+  /// Check user's passport verification status in Firestore
   Future<void> _checkVerificationStatus() async {
     setState(() => _isLoading = true);
     try {
@@ -85,6 +88,7 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
     }
   }
 
+  /// Prompt user to pick an image from camera or gallery, then process
   Future<void> _pickAndProcessImage({required bool fromCamera}) async {
     setState(() {
       _isLoading = true;
@@ -111,12 +115,13 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
     }
   }
 
+  /// Process the image using ML Kit to extract MRZ lines
   Future<void> _processImageForMRZ(String imagePath) async {
     try {
       final textRecognizer = TextRecognizer();
       final inputImage = InputImage.fromFilePath(imagePath);
 
-      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+      final recognizedText = await textRecognizer.processImage(inputImage);
 
       List<String> mrzCandidates = [];
       for (final block in recognizedText.blocks) {
@@ -137,7 +142,7 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
       }
 
       final String line1 = mrzCandidates[0];
-      // final String line2 = mrzCandidates[1]; // we might not need it for the name
+      // final String line2 = mrzCandidates[1]; // might not be needed for the name
       final extractedName = parseMalaysianNameLine(line1);
 
       await textRecognizer.close();
@@ -154,6 +159,7 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
     }
   }
 
+  /// Save the verification result to Firestore
   Future<void> _saveVerification() async {
     setState(() {
       _isLoading = true;
@@ -186,6 +192,7 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
     }
   }
 
+  /// Cancel or go back
   void _cancelVerification() {
     Navigator.pop(context);
   }
@@ -193,62 +200,171 @@ class _PassportVerificationScreenState extends State<PassportVerificationScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Modern AppBar with brand color
       appBar: AppBar(
-        title: const Text('Passport Verification'),
+        title: const Text(
+          'PopChat - Passport Verification',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        backgroundColor: const Color(0xFF0088cc),
+        elevation: 0,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            if (_errorMessage.isNotEmpty) ...[
-              Text(_errorMessage, style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 10),
-            ],
-            if (_isVerified) ...[
-              const Text('Passport Verified', style: TextStyle(color: Colors.green, fontSize: 18)),
-              const SizedBox(height: 5),
-              Text('Real Name: $_formattedName', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Back'),
-              )
-            ] else ...[
-              Text('Verification Status: Not Verified', style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 10),
-              Text('Extracted Name:\n$_formattedName',
-                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Camera'),
-                    onPressed: () => _pickAndProcessImage(fromCamera: true),
-                  ),
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Gallery'),
-                    onPressed: () => _pickAndProcessImage(fromCamera: false),
-                  ),
-                ],
+      // Light background
+      body: Container(
+        color: Colors.grey[100],
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Center(
+            child: Card(
+              elevation: 6,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
               ),
-              const SizedBox(height: 20),
-              if (_formattedName.isNotEmpty)
-                ElevatedButton(
-                  onPressed: _saveVerification,
-                  child: const Text('Verify Passport'),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    if (_errorMessage.isNotEmpty) ...[
+                      Text(
+                        _errorMessage,
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontSize: 14,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    if (_isVerified) ...[
+                      const Text(
+                        'Passport Verified',
+                        style: TextStyle(
+                          color: Colors.green,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        'Real Name: $_formattedName',
+                        style: const TextStyle(fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0088cc),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding:
+                          const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text(
+                          'Back',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ] else ...[
+                      const Text(
+                        'Verification Status: Not Verified',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Extracted Name:\n$_formattedName',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment:
+                        MainAxisAlignment.spaceEvenly,
+                        children: [
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.camera_alt,
+                                color: Colors.white),
+                            label: const Text('Camera'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0088cc),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: () =>
+                                _pickAndProcessImage(fromCamera: true),
+                          ),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.photo_library,
+                                color: Colors.white),
+                            label: const Text('Gallery'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0088cc),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: () =>
+                                _pickAndProcessImage(fromCamera: false),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      if (_formattedName.isNotEmpty)
+                        ElevatedButton(
+                          onPressed: _saveVerification,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0088cc),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14, horizontal: 24),
+                          ),
+                          child: const Text(
+                            'Verify Passport',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 20),
+                      OutlinedButton(
+                        onPressed: _cancelVerification,
+                        style: OutlinedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          side: const BorderSide(
+                            color: Colors.grey,
+                            width: 1,
+                          ),
+                        ),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              const SizedBox(height: 20),
-              OutlinedButton(
-                onPressed: _cancelVerification,
-                child: const Text('Cancel'),
-              )
-            ],
-          ],
+              ),
+            ),
+          ),
         ),
       ),
     );

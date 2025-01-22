@@ -1,8 +1,7 @@
-// lib/screens/chat/chat_screen.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -38,32 +37,33 @@ class _ChatScreenState extends State<ChatScreen> {
   bool hasLeftSession = false;
 
   // Encryption
-  encrypt.Key? groupKey; // current group's key
+  encrypt.Key? groupKey;
   int keyVersion = 1;
 
-  // Real name
+  // Real name / Verification
   bool _isUserVerified = false;
   String _passportName = '';
 
   @override
   void initState() {
     super.initState();
-    _initializeGroupKey().then((_) {
-      _testAESEncryptionDecryption();
-    });
+    // Attempt to initialize the group key; no pop-up on error.
+    _initializeGroupKey().then((_) => _testAESEncryptionDecryption());
     _listenToSessionChanges();
     _fetchUserVerificationStatus();
-    _testRSAEncryptionDecryption(); // optional
+    _testRSAEncryptionDecryption(); // Optional demonstration
   }
 
   // --------------------------------------------------------------------------
-  // USER VERIFICATION
+  // VERIFICATION STATUS
   // --------------------------------------------------------------------------
   Future<void> _fetchUserVerificationStatus() async {
     final user = _auth.currentUser;
     if (user == null) return;
+
     final doc = await _firestore.collection('users').doc(user.uid).get();
     if (!doc.exists) return;
+
     final data = doc.data() ?? {};
     setState(() {
       _isUserVerified = data['passportVerified'] ?? false;
@@ -71,104 +71,141 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  // Example test for RSA
+  // Example: RSA test (placeholder)
   Future<void> _testRSAEncryptionDecryption() async {
-    // same as your _testEncryptionDecryption()...
+    // For demonstration or debugging
   }
 
-  // Example test for AES
+  // AES test
   Future<void> _testAESEncryptionDecryption() async {
     if (groupKey == null) return;
     final testMsg = "Hello AES test!";
     final iv = encrypt.IV.fromSecureRandom(16);
-    final encrypter = encrypt.Encrypter(encrypt.AES(groupKey!, mode: encrypt.AESMode.cbc));
+    final encrypter =
+    encrypt.Encrypter(encrypt.AES(groupKey!, mode: encrypt.AESMode.cbc));
     final encrypted = encrypter.encrypt(testMsg, iv: iv);
     final decrypted = encrypter.decrypt(encrypted, iv: iv);
     if (testMsg == decrypted) {
-      print("AES test success!");
+      debugPrint("AES test success!");
     } else {
-      print("AES test failed!");
+      debugPrint("AES test failed!");
     }
   }
 
   // --------------------------------------------------------------------------
-  // GET / FETCH PRIVATE KEY
+  // PRIVATE KEY
   // --------------------------------------------------------------------------
   Future<String?> _getOrFetchPrivateKey() async {
     final user = _auth.currentUser;
     if (user == null) return null;
-    final localKey = await storage.read(key: 'privateKey');
-    return localKey;
+    return await storage.read(key: 'privateKey');
   }
 
   // --------------------------------------------------------------------------
-  // INITIALIZE GROUP KEY (pull the current version from Firestore)
+  // INITIALIZE GROUP KEY
   // --------------------------------------------------------------------------
   Future<void> _initializeGroupKey() async {
     try {
-      final sessionDoc = await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
+      final sessionDoc = await _firestore
+          .collection('chat_sessions')
+          .doc(widget.sessionCode)
+          .get();
+
       if (!sessionDoc.exists) {
         _showSessionEndedDialog();
         return;
       }
+
       final sessionData = sessionDoc.data() as Map<String, dynamic>;
-      final allEncKeys = sessionData['encryptedGroupKeys'] ?? {};
+
+      // Retrieve the nested encryptedGroupKeys
+      final rawEncKeys = sessionData['encryptedGroupKeys'];
+      if (rawEncKeys == null) {
+        throw Exception('No encryptedGroupKeys found in session.');
+      }
+      final typedEncKeys = Map<String, dynamic>.from(rawEncKeys);
+
       keyVersion = sessionData['keyVersion'] ?? 1;
+      final versionString = '$keyVersion';
 
-      // We look for submap => allEncKeys["1"], allEncKeys["2"], etc.
-      // The user's specific base64 is in allEncKeys["keyVersion"]["uid"].
-
-      final versionMap = (allEncKeys["$keyVersion"] ?? {}) as Map<String, dynamic>;
-      final encKeyBase64 = versionMap[_auth.currentUser!.uid] as String?;
-      print("DEBUG: encKeyBase64($keyVersion) = $encKeyBase64");
-      if (encKeyBase64 == null || encKeyBase64.isEmpty) {
-        throw Exception('No encrypted key for your user at keyVersion=$keyVersion');
+      if (!typedEncKeys.containsKey(versionString)) {
+        throw Exception(
+            'encryptedGroupKeys missing submap for keyVersion=$versionString');
       }
 
-      // Check local secure storage
+      final rawVersionMap = typedEncKeys[versionString];
+      final versionMap = Map<String, dynamic>.from(rawVersionMap);
+
+      final userId = _auth.currentUser!.uid;
+      final encKeyBase64 = versionMap[userId] as String?;
+
+      if (encKeyBase64 == null || encKeyBase64.isEmpty) {
+        throw Exception(
+            'Encrypted group key is null or empty (version=$versionString, userId=$userId)');
+      }
+
+      // Check if we already have the group key in local storage
       final groupKeyStorageKey = 'groupKey_${widget.sessionCode}_$keyVersion';
       final localKey = await storage.read(key: groupKeyStorageKey);
       if (localKey != null) {
         setState(() {
           groupKey = encrypt.Key(base64.decode(localKey));
         });
-        print('Loaded group key from local storage (v$keyVersion)');
+        debugPrint('Loaded group key v$keyVersion from local storage.');
         return;
       }
 
-      // Decrypt with user's private key
+      // Otherwise, decrypt with user's private key
       final privateKeyPem = await _getOrFetchPrivateKey();
       if (privateKeyPem == null) {
-        throw Exception('No private key found in local storage.');
+        throw Exception('No private key found for user in local storage.');
       }
 
-      // parse private key
       final parser = encrypt.RSAKeyParser();
       final privateKey = parser.parse(privateKeyPem) as pc.RSAPrivateKey;
 
-      final encrypter = encrypt.Encrypter(
-        encrypt.RSA(privateKey: privateKey, encoding: encrypt.RSAEncoding.PKCS1),
-      );
+      final encrypter = encrypt.Encrypter(encrypt.RSA(
+        privateKey: privateKey,
+        encoding: encrypt.RSAEncoding.PKCS1,
+      ));
       final encKey = encrypt.Encrypted.fromBase64(encKeyBase64);
       final decryptedBytes = encrypter.decryptBytes(encKey);
-      if (decryptedBytes.isEmpty) throw Exception("Decrypted group key is empty");
-      if (decryptedBytes.length != 32) throw Exception("Invalid group key length: ${decryptedBytes.length}");
+
+      if (decryptedBytes.isEmpty) {
+        throw Exception('Decrypted group key is empty for version=$keyVersion.');
+      }
+      if (decryptedBytes.length != 32) {
+        throw Exception(
+            'Invalid group key length: ${decryptedBytes.length}. Expected 32 bytes.');
+      }
+
       final newGroupKey = encrypt.Key(Uint8List.fromList(decryptedBytes));
 
-      // Save to local
-      await storage.write(key: groupKeyStorageKey, value: base64.encode(newGroupKey.bytes));
+      await storage.write(
+        key: groupKeyStorageKey,
+        value: base64.encode(newGroupKey.bytes),
+      );
+      if (!mounted) return;
+
       setState(() {
         groupKey = newGroupKey;
       });
-      print("Group key (v$keyVersion) initialized successfully.");
+      debugPrint('Group key (version=$keyVersion) initialized successfully.');
     } catch (e) {
-      print("Error initializing group key: $e");
-      _showDecryptionErrorDialog(e.toString());
+      // Instead of popping up an error dialog and returning to home,
+      // we'll just log the error and leave groupKey = null
+      // so messages show "Unable to decrypt message."
+      debugPrint('Error initializing group key: $e');
+      setState(() {
+        groupKey = null; // Force groupKey to null on error
+      });
+      // No pop-up or forced navigation
+      // If desired, you could display a small banner or do nothing.
     }
   }
 
   // --------------------------------------------------------------------------
-  // LISTEN TO SESSION CHANGES
+  // SESSION CHANGES LISTENER
   // --------------------------------------------------------------------------
   void _listenToSessionChanges() {
     _sessionSubscription = _firestore
@@ -181,18 +218,14 @@ class _ChatScreenState extends State<ChatScreen> {
         _showSessionEndedDialog();
         return;
       }
-      final sessionData = snapshot.data() as Map<String, dynamic>;
-      final newKeyVersion = sessionData['keyVersion'] ?? 1;
-      if (newKeyVersion != keyVersion) {
-        keyVersion = newKeyVersion;
-        await _initializeGroupKey(); // re-init if version changed
-        if (!mounted) return;
-      }
 
-      // Check if user is participant or left, etc.
+      final sessionData = snapshot.data() as Map<String, dynamic>;
       final participants = sessionData['participants'] ?? [];
       final leftParticipants = sessionData['leftParticipants'] ?? [];
+      final newKeyVersion = sessionData['keyVersion'] ?? 1;
+
       final currentUid = _auth.currentUser!.uid;
+      // Check participant status
       if (!participants.contains(currentUid)) {
         setState(() {
           isParticipant = false;
@@ -209,6 +242,14 @@ class _ChatScreenState extends State<ChatScreen> {
           hasLeftSession = false;
         });
       }
+
+      // Re-init group key if version changed
+      if (newKeyVersion != keyVersion) {
+        keyVersion = newKeyVersion;
+        if (isParticipant && !hasLeftSession) {
+          await _initializeGroupKey();
+        }
+      }
     });
   }
 
@@ -216,9 +257,8 @@ class _ChatScreenState extends State<ChatScreen> {
   // SHARE REAL NAME
   // --------------------------------------------------------------------------
   Future<void> _shareRealName() async {
-    if (!_isUserVerified || _passportName.isEmpty) {
-      return;
-    }
+    if (!_isUserVerified || _passportName.isEmpty) return;
+
     final user = _auth.currentUser;
     if (user == null) return;
     final userId = user.uid;
@@ -236,11 +276,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // --------------------------------------------------------------------------
-  // ENCRYPT GROUP MESSAGE
+  // ENCRYPT & DECRYPT MESSAGES
   // --------------------------------------------------------------------------
   Future<String> encryptGroupMessage(String msg, encrypt.Key groupKey) async {
     final iv = encrypt.IV.fromSecureRandom(16);
-    final encrypter = encrypt.Encrypter(encrypt.AES(groupKey, mode: encrypt.AESMode.cbc));
+    final encrypter =
+    encrypt.Encrypter(encrypt.AES(groupKey, mode: encrypt.AESMode.cbc));
     final encrypted = encrypter.encrypt(msg, iv: iv);
     return jsonEncode({
       'cipherText': encrypted.base64,
@@ -248,30 +289,29 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  // --------------------------------------------------------------------------
-  // DECRYPT GROUP MESSAGE
-  // --------------------------------------------------------------------------
-  Future<String> decryptGroupMessage(String encMsgJson, int messageKeyVersion) async {
+  Future<String> decryptGroupMessage(
+      String encMsgJson, int messageKeyVersion) async {
     try {
-      // load the correct key from local
-      final neededKeyStr = await storage.read(key: 'groupKey_${widget.sessionCode}_$messageKeyVersion');
+      final neededKeyStr = await storage.read(
+          key: 'groupKey_${widget.sessionCode}_$messageKeyVersion');
       if (neededKeyStr == null) {
-        print('Missing group key for version=$messageKeyVersion');
+        debugPrint('Missing group key for version=$messageKeyVersion');
         return 'Unable to decrypt (no local key)';
       }
-
       final neededKey = encrypt.Key(base64.decode(neededKeyStr));
+
       final map = jsonDecode(encMsgJson) as Map<String, dynamic>;
       if (!map.containsKey('cipherText') || !map.containsKey('iv')) {
         throw Exception('Encrypted JSON missing fields');
       }
+
       final enc = encrypt.Encrypted.fromBase64(map['cipherText']);
       final iv = encrypt.IV.fromBase64(map['iv']);
-      final encrypter = encrypt.Encrypter(encrypt.AES(neededKey, mode: encrypt.AESMode.cbc));
-      final decrypted = encrypter.decrypt(enc, iv: iv);
-      return decrypted;
+      final encrypter =
+      encrypt.Encrypter(encrypt.AES(neededKey, mode: encrypt.AESMode.cbc));
+      return encrypter.decrypt(enc, iv: iv);
     } catch (e) {
-      print('Decryption error: $e');
+      debugPrint('Decryption error: $e');
       return 'Unable to decrypt message';
     }
   }
@@ -280,12 +320,19 @@ class _ChatScreenState extends State<ChatScreen> {
   // SEND MESSAGE
   // --------------------------------------------------------------------------
   Future<void> _sendMessage() async {
-    if (_messageController.text.trim().isEmpty || groupKey == null) return;
+    // 1) Don’t return if groupKey is null. Only check if message is empty.
+    if (_messageController.text.trim().isEmpty) return;
+
     final user = _auth.currentUser;
     if (user == null) return;
 
     final userId = user.uid;
-    final sessionDoc = await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
+    final sessionDoc = await _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .get();
+
+    // 2) Session ended check
     if (!sessionDoc.exists) {
       _showSessionEndedDialog();
       return;
@@ -297,8 +344,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final msg = _messageController.text.trim();
     final localKeyVersion = sessionData['keyVersion'] ?? 1;
-    final encrypted = await encryptGroupMessage(msg, groupKey!);
 
+    // 3) Determine if we have an AES key. If so, encrypt; otherwise fallback to plaintext.
+    String? encryptedContent;
+    int usedKeyVersion = 0; // 0 indicates no encryption used
+
+    if (groupKey != null) {
+      // Normal encryption path
+      encryptedContent = await encryptGroupMessage(msg, groupKey!);
+      usedKeyVersion = localKeyVersion;
+    } else {
+      // Fallback: groupKey == null -> send unencrypted
+      encryptedContent = null;
+    }
+
+    // 4) Write message to Firestore
     await _firestore
         .collection('chat_sessions')
         .doc(widget.sessionCode)
@@ -307,21 +367,26 @@ class _ChatScreenState extends State<ChatScreen> {
       'senderId': userId,
       'senderName': senderName,
       'timestamp': Timestamp.now(),
-      'encryptedContent': encrypted,
-      'keyVersion': localKeyVersion,
+      // If unencrypted, store plaintext in a separate field
+      // or store it under 'plainText', etc.
+      'plainText': groupKey == null ? msg : null,
+      'encryptedContent': encryptedContent,
+      'keyVersion': usedKeyVersion,
       'verifiedShare': false,
     });
 
-    // update unread counts
+    // 5) Update unread counts
     final participants = sessionData['participants'] ?? [];
     final unreadCounts = Map<String, dynamic>.from(sessionData['unreadCounts'] ?? {});
+
     for (final pid in participants) {
       if (pid != userId) {
         unreadCounts[pid] = (unreadCounts[pid] ?? 0) + 1;
       }
     }
+
     await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
-      'lastMessage': 'Encrypted Message',
+      'lastMessage': groupKey == null ? 'Plaintext Message' : 'Encrypted Message',
       'lastMessageTime': Timestamp.now(),
       'unreadCounts': unreadCounts,
     });
@@ -329,8 +394,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.clear();
   }
 
+
   // --------------------------------------------------------------------------
-  // STREAM OF MESSAGES
+  // MESSAGES STREAM
   // --------------------------------------------------------------------------
   Stream<QuerySnapshot> _messagesStream() {
     return _firestore
@@ -347,6 +413,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final currentUserId = _auth.currentUser?.uid ?? '';
+
     return Scaffold(
       appBar: AppBar(
         title: GestureDetector(
@@ -356,125 +423,180 @@ class _ChatScreenState extends State<ChatScreen> {
               builder: (_) => SessionInfoScreen(sessionCode: widget.sessionCode),
             ),
           ),
-          child: Text('Session ${widget.sessionCode}'),
-        ),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _messagesStream(),
-              builder: (context, snap) {
-                if (!snap.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final docs = snap.data!.docs;
-                return ListView.builder(
-                  reverse: true,
-                  itemCount: docs.length,
-                  itemBuilder: (ctx, index) {
-                    final messageData = docs[index].data() as Map<String, dynamic>;
-                    final isMe = messageData['senderId'] == currentUserId;
-                    final isShare = messageData['verifiedShare'] ?? false;
-
-                    if (isShare) {
-                      // Real-name share
-                      final realName = messageData['senderName'] ?? 'Unknown';
-                      return _buildVerifiedShareBubble(realName, isMe);
-                    }
-
-                    // normal encrypted
-                    return FutureBuilder<String>(
-                      future: _decryptFuture(messageData),
-                      builder: (ctx2, snap2) {
-                        final decryptedText = snap2.data ?? 'Decrypting...';
-                        return _buildNormalMessageBubble(
-                          decryptedText,
-                          messageData['senderName'] ?? 'Unknown',
-                          isMe,
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            ),
+          child: Text(
+            'Session ${widget.sessionCode}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          const Divider(height: 1),
-          if (isParticipant && !hasLeftSession) _buildInputArea()
-          else if (hasLeftSession)
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Text('You have left this session.'),
-            )
-          else
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Text('You are no longer a participant in this session.'),
+        ),
+        backgroundColor: const Color(0xFF0088cc), // Telegram-like blue
+        elevation: 0,
+      ),
+      body: Container(
+        color: Colors.grey[100],
+        child: Column(
+          children: [
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                stream: _messagesStream(),
+                builder: (context, snap) {
+                  if (snap.hasError) {
+                    return Center(
+                      child: Text('Error: ${snap.error}'),
+                    );
+                  }
+                  if (!snap.hasData) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snap.data!.docs;
+                  return ListView.builder(
+                    reverse: true,
+                    itemCount: docs.length,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 10),
+                    itemBuilder: (ctx, index) {
+                      final messageData =
+                      docs[index].data() as Map<String, dynamic>;
+                      final isMe = messageData['senderId'] == currentUserId;
+                      final isShare = messageData['verifiedShare'] ?? false;
+
+                      if (isShare) {
+                        // Real-name share message bubble
+                        final realName =
+                            messageData['senderName'] ?? 'Unknown';
+                        return _buildVerifiedShareBubble(realName, isMe);
+                      }
+
+                      // Normal encrypted message
+                      return FutureBuilder<String>(
+                        future: _decryptFuture(messageData),
+                        builder: (ctx2, snap2) {
+                          final decryptedText =
+                              snap2.data ?? 'Decrypting...';
+                          return _buildMessageBubble(
+                            text: decryptedText,
+                            senderName:
+                            messageData['senderName'] ?? 'Unknown',
+                            isMe: isMe,
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
             ),
-        ],
+            const Divider(height: 1),
+            if (isParticipant && !hasLeftSession)
+              _buildInputArea()
+            else if (hasLeftSession)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text('You have left this session.'),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text('You are no longer a participant in this session.'),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  // Asynchronously decrypt
+  // Decrypt in a separate function
   Future<String> _decryptFuture(Map<String, dynamic> msg) async {
+    // Check if there's a plainText field (i.e., unencrypted message).
+    final plainContent = msg['plainText'] as String?;
+    if (plainContent != null && plainContent.isNotEmpty) {
+      // This is an unencrypted message. Return it directly.
+      return plainContent;
+    }
+
+    // Otherwise, proceed with normal decryption logic
     final encContent = msg['encryptedContent'] as String?;
-    if (encContent == null || encContent.isEmpty) return '';
+    if (encContent == null || encContent.isEmpty) {
+      // No encryption, no plain text => empty string or unknown
+      return '';
+    }
+
+    // Attempt to decrypt
     final v = msg['keyVersion'] ?? 1;
     return await decryptGroupMessage(encContent, v);
   }
 
+
+  // Verified share bubble
   Widget _buildVerifiedShareBubble(String realName, bool isMe) {
-    return ListTile(
-      title: Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: isMe ? Colors.green[50] : Colors.orange[50],
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(realName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              const SizedBox(width: 4),
-              const Icon(Icons.verified, color: Colors.blue, size: 16),
-            ],
-          ),
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isMe ? Colors.green[50] : Colors.orange[50],
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              realName,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.verified, color: Colors.blue, size: 16),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildNormalMessageBubble(String text, String senderName, bool isMe) {
-    return ListTile(
-      title: Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: isMe ? Colors.blue[200] : Colors.grey[300],
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(text, style: const TextStyle(fontSize: 16)),
+  // Normal message bubble
+  Widget _buildMessageBubble({
+    required String text,
+    required String senderName,
+    required bool isMe,
+  }) {
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color:
+          isMe ? const Color(0xFF0088cc).withOpacity(0.15) : Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: isMe
+              ? Border.all(color: const Color(0xFF0088cc), width: 1)
+              : Border.all(color: Colors.grey.shade300),
         ),
-      ),
-      subtitle: Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: Text(
-          senderName,
-          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        child: Column(
+          crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Text(
+              text,
+              style: const TextStyle(fontSize: 15),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              senderName,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
         ),
       ),
     );
   }
 
+  // Input area
   Widget _buildInputArea() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      color: Theme.of(context).cardColor,
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -482,41 +604,56 @@ class _ChatScreenState extends State<ChatScreen> {
             Expanded(
               child: TextField(
                 controller: _messageController,
-                decoration: const InputDecoration.collapsed(hintText: 'Send a message'),
+                decoration: const InputDecoration(
+                  hintText: 'Send a message',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding:
+                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                ),
               ),
             ),
+            const SizedBox(width: 8),
             IconButton(
-              icon: const Icon(Icons.send),
+              icon: const Icon(Icons.send, color: Color(0xFF0088cc)),
               onPressed: _sendMessage,
             ),
           ]),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (_isUserVerified)
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.verified_user),
-                  label: const Text('Share My Real Name'),
-                  onPressed: _shareRealName,
-                )
-              else
-                Tooltip(
-                  message: 'Passport not verified',
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.cancel),
-                    label: const Text('Share My Real Name'),
-                    onPressed: null,
+          // Share Real Name Button
+          if (_isUserVerified)
+            ElevatedButton.icon(
+              icon: const Icon(Icons.verified_user, color: Colors.white),
+              label: const Text('Share My Real Name'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0088cc),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: _shareRealName,
+            )
+          else
+            Tooltip(
+              message: 'Passport not verified',
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.cancel),
+                label: const Text('Share My Real Name'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.grey,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 8),
+                onPressed: null,
+              ),
+            ),
         ],
       ),
     );
   }
 
+  // Session ended
   void _showSessionEndedDialog() {
     _sessionSubscription?.cancel();
     if (!mounted) return;
@@ -525,26 +662,6 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Session Ended'),
         content: const Text('This session has ended or been deleted.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.pop(context);
-            },
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showDecryptionErrorDialog(String err) {
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Decryption Error'),
-        content: Text(err),
         actions: [
           TextButton(
             onPressed: () {

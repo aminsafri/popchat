@@ -23,7 +23,7 @@ class SessionInfoScreen extends StatefulWidget {
 class _SessionInfoScreenState extends State<SessionInfoScreen> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
-  final storage = FlutterSecureStorage();
+  final storage = const FlutterSecureStorage();
 
   Map<String, dynamic>? sessionData;
   bool isLoading = true;
@@ -39,7 +39,10 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
   }
 
   Future<void> _fetchSessionData() async {
-    DocumentSnapshot doc = await _firestore.collection('chat_sessions').doc(widget.sessionCode).get();
+    final doc = await _firestore
+        .collection('chat_sessions')
+        .doc(widget.sessionCode)
+        .get();
     if (doc.exists) {
       setState(() {
         sessionData = doc.data() as Map<String, dynamic>;
@@ -47,7 +50,6 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
         isLoading = false;
       });
     } else {
-      // Handle session not found
       setState(() {
         isLoading = false;
       });
@@ -62,33 +64,33 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     return encrypt.Key.fromSecureRandom(32); // 256-bit key
   }
 
-  /// Helper method to format PEM string with line breaks
   String reconstructPem(String pem, String keyType) {
-    // Remove headers and footers if present
-    pem = pem.replaceAll('-----BEGIN RSA PUBLIC KEY-----', '');
-    pem = pem.replaceAll('-----END RSA PUBLIC KEY-----', '');
-    // Insert line breaks every 64 characters
+    pem = pem.replaceAll('-----BEGIN $keyType-----', '');
+    pem = pem.replaceAll('-----END $keyType-----', '');
+    pem = pem.replaceAll('\n', '').replaceAll('\r', '').replaceAll(' ', '');
     final buffer = StringBuffer();
     for (int i = 0; i < pem.length; i += 64) {
       int end = (i + 64 < pem.length) ? i + 64 : pem.length;
       buffer.writeln(pem.substring(i, end));
     }
-    return '-----BEGIN RSA PUBLIC KEY-----\n${buffer.toString()}-----END RSA PUBLIC KEY-----';
+    return '-----BEGIN $keyType-----\n${buffer.toString()}-----END $keyType-----';
   }
 
-  Future<String> encryptGroupKeyForParticipant(String participantPublicKeyPem, encrypt.Key groupKey) async {
-    // Ensure proper PEM formatting
+  Future<String> encryptGroupKeyForParticipant(
+      String participantPublicKeyPem, encrypt.Key groupKey) async {
     if (!participantPublicKeyPem.contains('-----BEGIN RSA PUBLIC KEY-----') ||
         !participantPublicKeyPem.contains('-----END RSA PUBLIC KEY-----')) {
       participantPublicKeyPem = reconstructPem(participantPublicKeyPem, 'RSA PUBLIC KEY');
     }
 
-    RSAPublicKey publicKey = CryptoUtils.rsaPublicKeyFromPem(participantPublicKeyPem);
+    final parsedKey = CryptoUtils.rsaPublicKeyFromPem(participantPublicKeyPem);
 
-    final encrypter = encrypt.Encrypter(encrypt.RSA(
-      publicKey: publicKey,
-      encoding: encrypt.RSAEncoding.PKCS1, // Ensure PKCS1 padding
-    ));
+    final encrypter = encrypt.Encrypter(
+      encrypt.RSA(
+        publicKey: parsedKey,
+        encoding: encrypt.RSAEncoding.PKCS1,
+      ),
+    );
     final encryptedGroupKey = encrypter.encryptBytes(groupKey.bytes);
     return encryptedGroupKey.base64;
   }
@@ -102,11 +104,12 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     }
 
     // Remove user from participants
-    List<dynamic> participants = List.from(sessionData!['participants']);
+    final participants = List<dynamic>.from(sessionData!['participants']);
     participants.remove(userId);
 
     // Remove user from alternativeNames
-    Map<String, dynamic> alternativeNames = Map<String, dynamic>.from(sessionData!['alternativeNames']);
+    final alternativeNames =
+    Map<String, dynamic>.from(sessionData!['alternativeNames']);
     alternativeNames.remove(userId);
 
     // Update Firestore
@@ -131,68 +134,81 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
 
   Future<void> _updateGroupKeyForParticipants(List<dynamic> participants) async {
     // Generate new group key
-    encrypt.Key newGroupKey = generateGroupKey();
+    final newGroupKey = generateGroupKey();
 
     // Encrypt group key for all participants
-    Map<String, String> encryptedGroupKeys = {};
+    final encryptedGroupKeys = <String, String>{};
 
-    for (String participantId in participants) {
-      // Retrieve participant's public key from Firestore
-      DocumentSnapshot userDoc = await _firestore.collection('users').doc(participantId).get();
-      String participantPublicKeyPem = userDoc['publicKey'];
-
-      String encryptedGroupKey = await encryptGroupKeyForParticipant(participantPublicKeyPem, newGroupKey);
-      encryptedGroupKeys[participantId] = encryptedGroupKey;
+    for (final participantId in participants) {
+      final userDoc =
+      await _firestore.collection('users').doc(participantId).get();
+      final participantPublicKeyPem = userDoc['publicKey'];
+      final encryptedKey =
+      await encryptGroupKeyForParticipant(participantPublicKeyPem, newGroupKey);
+      encryptedGroupKeys[participantId] = encryptedKey;
     }
 
     // Increment key version
-    int keyVersion = (sessionData!['keyVersion'] ?? 1) + 1;
+    final currentKeyVersion = sessionData!['keyVersion'] ?? 1;
+    final newKeyVersion = currentKeyVersion + 1;
 
     // Update session data
     await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
       'encryptedGroupKeys': encryptedGroupKeys,
-      'keyVersion': keyVersion,
+      'keyVersion': newKeyVersion,
     });
 
     // Store new group key for current user (if still a participant)
     if (participants.contains(currentUserId)) {
       await storage.write(
-          key: 'groupKey_${widget.sessionCode}_$keyVersion', value: base64.encode(newGroupKey.bytes));
+        key: 'groupKey_${widget.sessionCode}_$newKeyVersion',
+        value: base64.encode(newGroupKey.bytes),
+      );
     }
   }
 
   Future<void> _leaveSession() async {
-    String userId = _auth.currentUser!.uid;
+    final userId = _auth.currentUser!.uid;
 
     if (isOwner) {
       // Transfer ownership
-      List<dynamic> participants = List.from(sessionData!['participants']);
-      List<dynamic> remainingParticipants = List.from(participants);
+      final participants =
+      List<dynamic>.from(sessionData!['participants']);
+      final remainingParticipants = List<dynamic>.from(participants);
       remainingParticipants.remove(userId); // Exclude the owner
 
       if (remainingParticipants.isNotEmpty) {
         // Assign new owner
-        String newOwnerId = remainingParticipants.first;
-        await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
+        final newOwnerId = remainingParticipants.first;
+        await _firestore
+            .collection('chat_sessions')
+            .doc(widget.sessionCode)
+            .update({
           'ownerId': newOwnerId,
           'leftParticipants': FieldValue.arrayUnion([userId]),
-          // Do not remove the owner from participants
         });
 
         // Update group key for remaining participants
         await _updateGroupKeyForParticipants(remainingParticipants);
       } else {
         // Delete the session if no participants left
-        await _firestore.collection('chat_sessions').doc(widget.sessionCode).delete();
+        await _firestore
+            .collection('chat_sessions')
+            .doc(widget.sessionCode)
+            .delete();
       }
     } else {
       // Regular participant leaving
-      await _firestore.collection('chat_sessions').doc(widget.sessionCode).update({
+      await _firestore
+          .collection('chat_sessions')
+          .doc(widget.sessionCode)
+          .update({
         'leftParticipants': FieldValue.arrayUnion([userId]),
       });
 
       // Remove user from participants list
-      List<dynamic> participants = List.from(sessionData!['participants']);
+      final participants =
+      List<dynamic>.from(sessionData!['participants']);
       participants.remove(userId);
 
       // Update group key for remaining participants
@@ -210,8 +226,8 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
   }
 
   Future<void> _deleteSession() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    List<String> deletedSessions = prefs.getStringList('deletedSessions') ?? [];
+    final prefs = await SharedPreferences.getInstance();
+    final deletedSessions = prefs.getStringList('deletedSessions') ?? [];
     deletedSessions.add(widget.sessionCode);
     await prefs.setStringList('deletedSessions', deletedSessions);
 
@@ -220,7 +236,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
   }
 
   Future<void> _confirmKickMember(String userId, String displayName) async {
-    bool confirm = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Kick Member'),
@@ -245,7 +261,7 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
   }
 
   Future<void> _confirmLeaveSession() async {
-    bool confirm = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Leave Session'),
@@ -270,11 +286,12 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
   }
 
   Future<void> _confirmDeleteSession() async {
-    bool confirm = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Session'),
-        content: const Text('Are you sure you want to delete this session from your chat list?'),
+        content: const Text(
+            'Are you sure you want to delete this session from your chat list?'),
         actions: [
           TextButton(
             child: const Text('Cancel'),
@@ -299,7 +316,9 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     if (isLoading) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Session Info'),
+          title: const Text('PopChat - Session Info'),
+          centerTitle: true,
+          backgroundColor: const Color(0xFF0088cc),
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -308,103 +327,218 @@ class _SessionInfoScreenState extends State<SessionInfoScreen> {
     if (sessionData == null) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Session Info'),
+          title: const Text('PopChat - Session Info'),
+          centerTitle: true,
+          backgroundColor: const Color(0xFF0088cc),
         ),
         body: const Center(child: Text('Session not found')),
       );
     }
 
-    List<dynamic> participants = sessionData!['participants'];
-    Map<String, dynamic> alternativeNames = sessionData!['alternativeNames'];
-    Timestamp createdAtTimestamp = sessionData!['createdAt'];
-    DateTime createdAt = createdAtTimestamp.toDate();
-    bool isParticipant = participants.contains(currentUserId);
-    hasLeftSession = sessionData!['leftParticipants']?.contains(currentUserId) ?? false;
+    final participants = sessionData!['participants'] as List<dynamic>;
+    final alternativeNames =
+    Map<String, dynamic>.from(sessionData!['alternativeNames']);
+    final createdAtTimestamp = sessionData!['createdAt'] as Timestamp;
+    final createdAt = createdAtTimestamp.toDate();
+
+    final isParticipant = participants.contains(currentUserId);
+    hasLeftSession =
+        sessionData!['leftParticipants']?.contains(currentUserId) ?? false;
     isOwner = sessionData!['ownerId'] == currentUserId;
 
-    // Get session title and code
-    String sessionTitle = sessionData!['sessionTitle'] ?? 'Session ${widget.sessionCode}';
+    // Session Title and Code
+    final sessionTitle =
+        sessionData!['sessionTitle'] ?? 'Session ${widget.sessionCode}';
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Session Info'),
+        title: const Text(
+          'PopChat - Session Info',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        backgroundColor: const Color(0xFF0088cc),
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Session title
-            Text(
-              sessionTitle,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            // Session code
-            Text(
-              'Session Code: ${widget.sessionCode}',
-              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-            // Created at
-            Text(
-              'Created At: ${DateFormat.yMMMd().add_jm().format(createdAt)}',
-              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-            // Participants List
-            const Text(
-              'Participants:',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: participants.length,
-                itemBuilder: (context, index) {
-                  String participantId = participants[index];
-                  String participantName = alternativeNames[participantId] ?? 'Unknown';
-                  bool hasLeft = sessionData!['leftParticipants']?.contains(participantId) ?? false;
-
-                  return ListTile(
-                    title: Text(
-                      participantName,
-                      style: TextStyle(
-                        decoration: hasLeft ? TextDecoration.lineThrough : null,
-                        color: hasLeft ? Colors.grey : Colors.black,
-                      ),
-                    ),
-                    trailing: isOwner && participantId != currentUserId && !hasLeft
-                        ? IconButton(
-                      icon: const Icon(Icons.remove_circle, color: Colors.red),
-                      onPressed: () => _confirmKickMember(participantId, participantName),
-                    )
-                        : null,
-                  );
-                },
-              ),
-            ),
-            // Leave or Delete Session Button
-            if (isParticipant && !hasLeftSession) ...[
-              // Show "Leave Session" button
-              if (isOwner)
-                ElevatedButton(
-                  onPressed: _confirmLeaveSession,
-                  child: const Text('Leave Session (Transfer Ownership)'),
-                )
-              else
-                ElevatedButton(
-                  onPressed: _confirmLeaveSession,
-                  child: const Text('Leave Session'),
+      body: Container(
+        color: Colors.grey[100],
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              // Session info in a Card
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
-            ] else ...[
-              ElevatedButton(
-                onPressed: _confirmDeleteSession,
-                child: const Text('Delete Session'),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Session Title
+                      Text(
+                        sessionTitle,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Session code
+                      Text(
+                        'Session Code: ${widget.sessionCode}',
+                        style: TextStyle(
+                            fontSize: 14, color: Colors.grey[700]),
+                      ),
+                      const SizedBox(height: 8),
+                      // Created at
+                      Text(
+                        'Created At: ${DateFormat.yMMMd().add_jm().format(createdAt)}',
+                        style: TextStyle(
+                            fontSize: 14, color: Colors.grey[700]),
+                      ),
+                    ],
+                  ),
+                ),
               ),
+              const SizedBox(height: 16),
+              // Participants list in an expanded section
+              Expanded(
+                child: Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Participants:',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Expanded(
+                          child: ListView.builder(
+                            itemCount: participants.length,
+                            itemBuilder: (context, index) {
+                              final participantId = participants[index];
+                              final participantName = alternativeNames[participantId] ?? 'Unknown';
+                              final hasLeft =
+                                  sessionData!['leftParticipants']
+                                      ?.contains(participantId) ??
+                                      false;
+
+                              return ListTile(
+                                contentPadding: const EdgeInsets.all(0),
+                                title: Text(
+                                  participantName,
+                                  style: TextStyle(
+                                    decoration: hasLeft
+                                        ? TextDecoration.lineThrough
+                                        : null,
+                                    color:
+                                    hasLeft ? Colors.grey : Colors.black87,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                trailing: (isOwner &&
+                                    participantId != currentUserId &&
+                                    !hasLeft)
+                                    ? IconButton(
+                                  icon: const Icon(Icons.person_remove,
+                                      color: Colors.red),
+                                  onPressed: () => _confirmKickMember(
+                                      participantId, participantName),
+                                )
+                                    : null,
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Buttons for leaving or deleting session
+              _buildActionButtons(isParticipant, hasLeftSession),
             ],
-          ],
+          ),
         ),
       ),
     );
+  }
+
+  Widget _buildActionButtons(bool isParticipant, bool hasLeftSession) {
+    if (isParticipant && !hasLeftSession) {
+      // If user is still in session
+      if (isOwner) {
+        // Owner sees "Leave Session (Transfer Ownership)"
+        return SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _confirmLeaveSession,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0088cc),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: const Text(
+              'Leave Session (Transfer Ownership)',
+              style: TextStyle(fontSize: 16, color: Colors.white),
+            ),
+          ),
+        );
+      } else {
+        // Regular participant sees "Leave Session"
+        return SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _confirmLeaveSession,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0088cc),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: const Text(
+              'Leave Session',
+              style: TextStyle(fontSize: 16, color: Colors.white),
+            ),
+          ),
+        );
+      }
+    } else {
+      // If user is not a participant or has left
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: _confirmDeleteSession,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.redAccent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          child: const Text(
+            'Delete Session',
+            style: TextStyle(fontSize: 16, color: Colors.white),
+          ),
+        ),
+      );
+    }
   }
 }

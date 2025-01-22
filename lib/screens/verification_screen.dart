@@ -8,7 +8,10 @@ class VerificationScreen extends StatefulWidget {
   final String verificationId;
   final String phoneNumber;
 
-  VerificationScreen({required this.verificationId, required this.phoneNumber});
+  VerificationScreen({
+    required this.verificationId,
+    required this.phoneNumber,
+  });
 
   @override
   State<VerificationScreen> createState() => _VerificationScreenState();
@@ -38,7 +41,7 @@ class _VerificationScreenState extends State<VerificationScreen> {
       final isNewUser = userCredential.additionalUserInfo?.isNewUser ?? false;
 
       if (isNewUser) {
-        // Navigate to additional info screen
+        // Navigate to AdditionalInfoScreen
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -65,46 +68,137 @@ class _VerificationScreenState extends State<VerificationScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Modern AppBar
       appBar: AppBar(
-        title: const Text('Verify OTP'),
+        title: const Text('PopChat - Verify'),
+        centerTitle: true,
+        backgroundColor: const Color(0xFF0265FF),
+        elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              Text(
-                'Enter the OTP sent to ${widget.phoneNumber}',
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 20),
-              TextFormField(
-                decoration: const InputDecoration(labelText: 'OTP'),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter OTP';
-                  }
-                  return null;
-                },
-                onChanged: (value) => smsCode = value.trim(),
-              ),
-              const SizedBox(height: 20),
-              if (isLoading)
-                const CircularProgressIndicator()
-              else
-                ElevatedButton(
-                  onPressed: () {
-                    if (_formKey.currentState?.validate() ?? false) {
-                      _signInWithPhoneNumber();
-                    }
-                  },
-                  child: const Text('Verify'),
-                ),
-              const SizedBox(height: 10),
-              Text(errorMessage, style: const TextStyle(color: Colors.red)),
+      // Gradient Background for a modern look
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Color(0xFF0265FF),
+              Color(0xFF3CAEFF),
             ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Card(
+              elevation: 6,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header text
+                      Text(
+                        'Verify Your Phone',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Subheader with phone number
+                      Text(
+                        'Enter the OTP sent to:',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      // Highlight phone number
+                      Text(
+                        widget.phoneNumber,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      // OTP Entry Field
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          labelText: 'OTP',
+                          hintText: '6-digit code',
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter the OTP';
+                          }
+                          if (value.length < 4) {
+                            return 'OTP must be at least 4 digits';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) => smsCode = value.trim(),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Verify Button or Loading Indicator
+                      if (isLoading)
+                        const CircularProgressIndicator()
+                      else
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () {
+                              if (_formKey.currentState?.validate() ?? false) {
+                                _signInWithPhoneNumber();
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0265FF),
+                              elevation: 5,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 16,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text(
+                              'Verify',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 10),
+                      // Error Message
+                      if (errorMessage.isNotEmpty)
+                        Text(
+                          errorMessage,
+                          style: const TextStyle(color: Colors.red),
+                          textAlign: TextAlign.center,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
